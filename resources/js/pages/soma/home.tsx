@@ -128,16 +128,30 @@ function rankTables(rows: MinerRow[]): RankTable {
     return out;
 }
 
-/** "#3/140" and "-0.012" (or "top") for one of our scores; null when the entry is not counted (a partial value). */
-function placeText(t: RankTable, k: ScoreKey, m: MinerRow, value: number | null): { place: string; gap: string } | null {
+/** The nine scores in three groups, the order every score table uses. */
+const GROUPS: { title: string; keys: ScoreKey[] }[] = [
+    { title: 'final', keys: ['overall', 'stage1', 'stage2'] },
+    { title: 'bands', keys: ['short', 'medium', 'long'] },
+    { title: 'two bands', keys: ['s+m', 's+l', 'm+l'] },
+];
+
+type Place = { place: number; n: number; gap: number };
+
+/** One of our scores against the counted entries: its place, how many were counted, the gap to #1. Null when not counted. */
+function placeOf(t: RankTable, k: ScoreKey, m: MinerRow, value: number | null): Place | null {
     const place = t[k].place.get(m.hotkey);
     const best = t[k].best;
     if (!place || value === null || best === null) {
         return null;
     }
 
-    return { place: `#${place}/${t[k].n}`, gap: place === 1 ? 'top' : `-${(best - value).toFixed(3)}` };
+    return { place, n: t[k].n, gap: best - value };
 }
+
+// top 10 % green, top 25 % blue, the rest grey
+const placeShare = (p: Place) => p.place / p.n;
+const placeTone = (p: Place) => (placeShare(p) <= 0.1 ? 'text-emerald-600 dark:text-emerald-400' : placeShare(p) <= 0.25 ? 'text-sky-600 dark:text-sky-400' : 'text-foreground/80');
+const placeFill = (p: Place) => (placeShare(p) <= 0.1 ? 'bg-emerald-500' : placeShare(p) <= 0.25 ? 'bg-sky-500' : 'bg-zinc-400 dark:bg-zinc-500');
 
 /** Passes against the baseline's passes on the finished runs of an entry (1 = same quality). */
 function qualityOf(m: MinerRow): { passed: number; base: number } {
@@ -193,8 +207,6 @@ export default function Home(props: Props) {
         const rank = new Map(done.map((m, i) => [m.hotkey, i + 1]));
         const running = miners.filter((m) => stateOf(m) === 'running');
         const scoring = miners.filter((m) => stateOf(m) === 'scoring');
-        const s1sorted = [...passers].sort((a, b) => (b.stage1_score ?? -9) - (a.stage1_score ?? -9));
-        const s1rank = new Map(s1sorted.map((m, i) => [m.hotkey, i + 1]));
         const label = (m: MinerRow) => Number((m.our_label ?? 'S999').replace(/\D/g, '')) || 999;
         const ours = miners.filter((m) => m.is_ours);
         const order: Record<State, number> = { done: 0, scoring: 1, running: 2, waiting: 3, out: 4 };
@@ -224,7 +236,7 @@ export default function Home(props: Props) {
         const ranks = rankTables(miners);
         const oursBest = bestBy(ours);
 
-        return { leaders, oursBest, ranks, passers, done, rank, running, scoring, s1rank, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
+        return { leaders, oursBest, ranks, passers, done, rank, running, scoring, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
     }, [miners]);
 
     const best = v.ours.find((m) => stateOf(m) === 'done') ?? null;
@@ -240,36 +252,7 @@ export default function Home(props: Props) {
             <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 p-4 md:p-6">
                 <Hero leaders={v.leaders} competition={competition} phase={phase} now={now} end={end} uploadEnd={uploadEnd} done={v.done.length} running={v.running.length} scoring={v.scoring.length} passers={v.passers.length} entries={miners.length} watcher={watcher} pending={pending} />
 
-                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                    <Kpi icon={Trophy} title="Our best now" tone="indigo">
-                        <div className="grid grid-cols-3 gap-x-3 gap-y-1">
-                            {SCORE_KEYS.map((k) => {
-                                const b = v.oursBest[k];
-
-                                return (
-                                    <div key={k} className="min-w-0">
-                                        <div className="text-[10px] tracking-wide text-muted-foreground uppercase">{SCORE_LABEL[k]}</div>
-                                        {b ? (
-                                            <a href={somaUrl(competition.id, b.m.hotkey)} target="_blank" rel="noopener noreferrer" className="flex items-baseline gap-1 hover:underline">
-                                                <span className={cn('font-mono text-sm font-semibold tabular-nums', scoreTone(b.value))}>{signed(b.value)}</span>
-                                                <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">{b.m.our_label}</span>
-                                            </a>
-                                        ) : null}
-                                        {b ? (
-                                            <PlaceLine t={v.ranks} k={k} m={b.m} value={b.value} partial={false} />
-                                        ) : (
-                                            <span className="text-sm text-muted-foreground">—</span>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                        {best && (
-                            <p className="mt-2 text-xs text-muted-foreground">
-                                stage 2: #{v.rank.get(best.hotkey)} of {v.done.length} fully scored · top {signed(v.done[0]?.stage2_score)} · median {signed(v.median)}
-                            </p>
-                        )}
-                    </Kpi>
+                <div className="grid gap-4 sm:grid-cols-3">
                     <Kpi icon={Sparkles} title="Our entries" tone="violet">
                         <div className="flex items-baseline gap-2">
                             <span className="text-3xl font-semibold tabular-nums">{v.ours.length}</span>
@@ -317,6 +300,14 @@ export default function Home(props: Props) {
                 </div>
 
                 <Section
+                    icon={Trophy}
+                    title="Our best per score"
+                    hint={`for each score: our best entry, its place, the gap to #1 and who is #1 · stage 1 ranked among the ${v.passers.length} stage-1 passers, the rest among the ${v.done.length} entries whose stage-2 runs are all scored${v.median !== null ? ` (stage-2 median ${signed(v.median)})` : ''}`}
+                >
+                    <BestTable best={v.oursBest} leaders={v.leaders} ranks={v.ranks} competition={competition.id} />
+                </Section>
+
+                <Section
                     icon={Sparkles}
                     title="Our entries"
                     hint="ranked among the entries whose stage-2 runs are all scored; others show their progress · click opens thesoma.ai"
@@ -324,7 +315,7 @@ export default function Home(props: Props) {
                 >
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                         {v.ours.map((m) => (
-                            <EntryCard key={m.hotkey} m={m} ranks={v.ranks} competition={competition.id} tasks={tasks} rank={v.rank.get(m.hotkey) ?? null} of={v.done.length} s1rank={v.s1rank.get(m.hotkey) ?? null} passers={v.passers.length} />
+                            <EntryCard key={m.hotkey} m={m} ranks={v.ranks} competition={competition.id} tasks={tasks} rank={v.rank.get(m.hotkey) ?? null} of={v.done.length} />
                         ))}
                     </div>
                 </Section>
@@ -491,13 +482,12 @@ function Hero(p: {
 
 // ------------------------------------------------------------------------------------------------ our entries
 
-function EntryCard({ m, ranks, competition, tasks, rank, of, s1rank, passers }: { m: MinerRow; ranks: RankTable; competition: number; tasks: TaskRef[]; rank: number | null; of: number; s1rank: number | null; passers: number }) {
+function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ranks: RankTable; competition: number; tasks: TaskRef[]; rank: number | null; of: number }) {
     const state = stateOf(m);
     const pct = progressOf(m);
     const q = qualityOf(m);
     const qShare = q.base > 0 ? q.passed / q.base : null;
     const top = state === 'done' && rank !== null && of > 0 ? rank / of : null;
-    const scores = scoresOf(m);
 
     return (
         <div
@@ -567,20 +557,9 @@ function EntryCard({ m, ranks, competition, tasks, rank, of, s1rank, passers }: 
                 )}
             </div>
 
-            {/* the nine scores; a partial value (still running or being scored) is amber */}
-            <div className="relative z-10 grid grid-cols-3 gap-x-2 gap-y-1 rounded-lg bg-muted/40 p-2">
-                {SCORE_KEYS.map((k) => {
-                    const val = scores[k];
-                    const partial = val !== null && isPartial(m, k);
-
-                    return (
-                        <div key={k} className="min-w-0" title={partial ? `${SCORE_LABEL[k]}: partial - runs without a result still count against it` : undefined}>
-                            <div className="truncate text-[10px] tracking-wide text-muted-foreground uppercase">{SCORE_LABEL[k]}</div>
-                            <div className={cn('font-mono text-xs font-medium tabular-nums', partial ? 'text-amber-600 dark:text-amber-400' : scoreTone(val))}>{signed(val)}</div>
-                            <PlaceLine t={ranks} k={k} m={m} value={val} partial={partial} />
-                        </div>
-                    );
-                })}
+            {/* the nine scores with their place and the gap to #1; a partial value (still running or being scored) is amber */}
+            <div className="relative z-10 rounded-lg bg-muted/40 px-3 py-2">
+                <ScoreTable m={m} ranks={ranks} />
             </div>
 
             <div className="relative z-10 grid grid-cols-6 gap-1">
@@ -830,7 +809,7 @@ function Feed({ events, competition, now }: { events: WatchEvent[]; competition:
 // ------------------------------------------------------------------------------------------------ hotkeys
 
 const emissionText = (v: number | null) => (v === null ? '—' : v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v));
-const placeTone = (r: number | null) => (r === null ? 'bg-muted text-muted-foreground' : r <= 10 ? 'bg-rose-600 text-white' : r <= 30 ? 'bg-amber-500 text-white' : 'bg-muted text-foreground');
+const queueTone = (r: number | null) => (r === null ? 'bg-muted text-muted-foreground' : r <= 10 ? 'bg-rose-600 text-white' : r <= 30 ? 'bg-amber-500 text-white' : 'bg-muted text-foreground');
 
 /** Our registered SN114 hotkeys, nearest to deregistration first: the next registration removes place 1. */
 function HotkeyTable({ rows, competition }: { rows: Props['hotkeys']['ours']; competition: number }) {
@@ -879,7 +858,7 @@ function HotkeyTable({ rows, competition }: { rows: Props['hotkeys']['ours']; co
                                     {h.immune ? (
                                         <Pill tone="sky">immune {h.immune_hours_left ?? '?'} h</Pill>
                                     ) : (
-                                        <span className={cn('inline-flex min-w-9 justify-center rounded px-1.5 font-mono text-xs font-semibold tabular-nums', placeTone(h.rank))}>{h.rank ?? '—'}</span>
+                                        <span className={cn('inline-flex min-w-9 justify-center rounded px-1.5 font-mono text-xs font-semibold tabular-nums', queueTone(h.rank))}>{h.rank ?? '—'}</span>
                                     )}
                                 </td>
                                 <td className={cn('px-3 py-1.5 text-right font-mono text-xs tabular-nums', moved !== null && moved > 0 && 'text-rose-600', moved !== null && moved < 0 && 'text-emerald-600')}>
@@ -898,22 +877,192 @@ function HotkeyTable({ rows, competition }: { rows: Props['hotkeys']['ours']; co
     );
 }
 
-/** Under one of our scores: its place among the counted entries, and the gap to the best (green "top" when first). */
-function PlaceLine({ t, k, m, value, partial }: { t: RankTable; k: ScoreKey; m: MinerRow; value: number | null; partial: boolean }) {
-    const pt = partial ? null : placeText(t, k, m, value);
-    if (!pt) {
-        return (
-            <div className="text-[10px] leading-tight text-muted-foreground">
-                <div>{partial ? 'partial' : '\u00a0'}</div>
-                <div>{'\u00a0'}</div>
-            </div>
-        );
-    }
+// ------------------------------------------------------------------------------------------------ score tables
+
+/** Where a place sits among the counted entries: full bar = #1. */
+function PlaceBar({ p }: { p: Place }) {
+    const fill = p.n > 1 ? 1 - (p.place - 1) / (p.n - 1) : 1;
 
     return (
-        <div className="font-mono text-[10px] leading-tight text-muted-foreground tabular-nums" title={`place among ${t[k].n} entries; the best is ${signed(t[k].best)}`}>
-            <div className="truncate">{pt.place}</div>
-            <div className={cn('truncate', pt.gap === 'top' ? 'text-emerald-600 dark:text-emerald-400' : '')}>{pt.gap === 'top' ? 'top' : `${pt.gap} to top`}</div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted" title={`#${p.place} of ${p.n}`}>
+            <div className={cn('h-full rounded-full', placeFill(p))} style={{ width: `${Math.max(4, 100 * fill)}%` }} />
+        </div>
+    );
+}
+
+function Gap({ p }: { p: Place }) {
+    return p.place === 1 ? <span className="font-semibold text-emerald-600 dark:text-emerald-400">#1</span> : <span className="text-muted-foreground">−{p.gap.toFixed(3)}</span>;
+}
+
+/** One entry's scores as rows: score, place of n, a bar, the gap to #1; a thin line between the groups. */
+function ScoreTable({ m, ranks }: { m: MinerRow; ranks: RankTable }) {
+    const scores = scoresOf(m);
+    // a score with no value yet (stage 2 not run) is left out, and so is a group left empty
+    const groups = GROUPS.map((g) => ({ ...g, keys: g.keys.filter((k) => scores[k] !== null) })).filter((g) => g.keys.length > 0);
+
+    return (
+        <table className="w-full text-xs tabular-nums">
+            <thead>
+                <tr className="text-[10px] tracking-wide text-muted-foreground uppercase">
+                    <th className="pb-1 text-left font-medium">score</th>
+                    <th className="pb-1 text-right font-medium" />
+                    <th className="pb-1 pl-3 text-right font-medium">place</th>
+                    <th className="w-12 pb-1 pl-2" />
+                    <th className="pb-1 pl-3 text-right font-medium">to #1</th>
+                </tr>
+            </thead>
+            {groups.map((g, gi) => (
+                <tbody key={g.title} className={cn(gi > 0 && 'border-t border-border/70', '[&>tr:first-child>td]:pt-1.5 [&>tr:last-child>td]:pb-1.5')}>
+                    {g.keys.map((k) => {
+                        const val = scores[k];
+                        const partial = val !== null && isPartial(m, k);
+                        const p = partial ? null : placeOf(ranks, k, m, val);
+
+                        return (
+                            <tr key={k}>
+                                <td className="py-0.5 pr-2 whitespace-nowrap text-muted-foreground">{SCORE_LABEL[k]}</td>
+                                <td className={cn('py-0.5 text-right font-mono text-[13px] font-semibold', partial ? 'text-amber-600 dark:text-amber-400' : scoreTone(val))}>{signed(val)}</td>
+                                {p ? (
+                                    <>
+                                        <td className={cn('py-0.5 pl-3 text-right font-mono font-medium', placeTone(p))}>
+                                            {p.place}
+                                            <span className="font-normal text-muted-foreground">/{p.n}</span>
+                                        </td>
+                                        <td className="py-0.5 pl-2">
+                                            <PlaceBar p={p} />
+                                        </td>
+                                        <td className="py-0.5 pl-3 text-right font-mono">
+                                            <Gap p={p} />
+                                        </td>
+                                    </>
+                                ) : (
+                                    <td colSpan={3} className="py-0.5 pl-3 text-right text-[11px] text-muted-foreground">
+                                        {partial ? 'partial · still scoring' : val === null ? '' : 'not ranked'}
+                                    </td>
+                                )}
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            ))}
+        </table>
+    );
+}
+
+type Best = Record<ScoreKey, { m: MinerRow; value: number } | null>;
+
+/** Our best entry per score next to the round's #1: columns are the nine scores, rows our best, its place, the gap, #1. */
+function BestTable({ best, leaders, ranks, competition }: { best: Best; leaders: Best; ranks: RankTable; competition: number }) {
+    const cols = GROUPS.flatMap((g) => g.keys.map((k, i) => ({ k, first: i === 0 })));
+    const rowHead = 'sticky left-0 z-10 bg-card py-2 pr-3 pl-4 text-left text-xs font-medium whitespace-nowrap text-muted-foreground';
+    const cell = (first: boolean) => cn('px-2.5 py-2 text-right align-middle', first && 'border-l border-border/70');
+
+    return (
+        <div className="overflow-x-auto rounded-xl border bg-card shadow-sm">
+            <table className="w-full min-w-[900px] table-fixed tabular-nums">
+                <colgroup>
+                    <col className="w-28" />
+                    {cols.map(({ k }) => (
+                        <col key={k} />
+                    ))}
+                </colgroup>
+                <thead>
+                    <tr className="text-[10px] tracking-wide text-muted-foreground uppercase">
+                        <th className={cn(rowHead, 'pt-3 pb-0')} />
+                        {GROUPS.map((g) => (
+                            <th key={g.title} colSpan={g.keys.length} className="border-l border-border/70 px-3 pt-3 text-left font-medium">
+                                {g.title}
+                            </th>
+                        ))}
+                    </tr>
+                    <tr className="border-b">
+                        <th className={rowHead} />
+                        {cols.map(({ k, first }) => (
+                            <th key={k} className={cn(cell(first), 'pt-1 text-sm font-semibold')}>
+                                {SCORE_LABEL[k]}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody className="[&>tr:not(:last-child)]:border-b [&>tr]:border-border/50">
+                    <tr>
+                        <th className={rowHead}>our best</th>
+                        {cols.map(({ k, first }) => {
+                            const b = best[k];
+
+                            return (
+                                <td key={k} className={cell(first)}>
+                                    {b ? (
+                                        <a href={somaUrl(competition, b.m.hotkey)} target="_blank" rel="noopener noreferrer" className="inline-flex flex-col items-end gap-0.5 hover:underline" title={`${b.m.our_label} · ${b.m.hotkey}`}>
+                                            <span className={cn('font-mono text-base font-semibold', scoreTone(b.value))}>{signed(b.value)}</span>
+                                            <span className="rounded bg-indigo-600 px-1.5 py-px text-[10px] leading-none font-semibold text-white">{b.m.our_label}</span>
+                                        </a>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    )}
+                                </td>
+                            );
+                        })}
+                    </tr>
+                    <tr>
+                        <th className={rowHead}>place</th>
+                        {cols.map(({ k, first }) => {
+                            const b = best[k];
+                            const p = b ? placeOf(ranks, k, b.m, b.value) : null;
+
+                            return (
+                                <td key={k} className={cell(first)}>
+                                    {p ? (
+                                        <div className="ml-auto flex w-full max-w-24 flex-col items-end gap-1">
+                                            <span className={cn('font-mono text-sm font-semibold whitespace-nowrap', placeTone(p))}>
+                                                #{p.place}
+                                                <span className="text-xs font-normal text-muted-foreground">/{p.n}</span>
+                                            </span>
+                                            <PlaceBar p={p} />
+                                        </div>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    )}
+                                </td>
+                            );
+                        })}
+                    </tr>
+                    <tr>
+                        <th className={rowHead}>gap to #1</th>
+                        {cols.map(({ k, first }) => {
+                            const b = best[k];
+                            const p = b ? placeOf(ranks, k, b.m, b.value) : null;
+
+                            return (
+                                <td key={k} className={cn(cell(first), 'font-mono text-sm')}>
+                                    {p ? <Gap p={p} /> : <span className="text-muted-foreground">—</span>}
+                                </td>
+                            );
+                        })}
+                    </tr>
+                    <tr>
+                        <th className={rowHead}>#1 now</th>
+                        {cols.map(({ k, first }) => {
+                            const l = leaders[k];
+                            const who = l ? (l.m.is_ours ? l.m.our_label : l.m.family_name) ?? l.m.hotkey.slice(0, 8) : null;
+
+                            return (
+                                <td key={k} className={cell(first)}>
+                                    {l ? (
+                                        <a href={somaUrl(competition, l.m.hotkey)} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full flex-col items-end hover:underline" title={`${who} · ${l.m.hotkey}`}>
+                                            <span className={cn('font-mono text-sm font-semibold', scoreTone(l.value))}>{signed(l.value)}</span>
+                                            <span className="max-w-full truncate text-[11px] text-muted-foreground">{who}</span>
+                                            <span className="font-mono text-[10px] text-muted-foreground/80">{l.m.hotkey.slice(0, 8)}</span>
+                                        </a>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    )}
+                                </td>
+                            );
+                        })}
+                    </tr>
+                </tbody>
+            </table>
         </div>
     );
 }
