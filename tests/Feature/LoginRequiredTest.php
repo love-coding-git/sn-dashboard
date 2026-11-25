@@ -9,8 +9,7 @@ use Tests\TestCase;
 
 /**
  * The public deployment: with DASHBOARD_REQUIRE_LOGIN every dashboard page sends a guest to the login, and the one
- * account written by `dashboard:admin` from .env gets in. The route group reads the setting when the routes load, so it is
- * set in the environment before the application boots.
+ * account written by `dashboard:admin` from .env gets in (RequireLogin reads the setting on each request).
  */
 class LoginRequiredTest extends TestCase
 {
@@ -18,20 +17,12 @@ class LoginRequiredTest extends TestCase
 
     protected function setUp(): void
     {
-        foreach (['DASHBOARD_REQUIRE_LOGIN' => 'true', 'DASHBOARD_ADMIN_EMAIL' => 'owner@example.com', 'DASHBOARD_ADMIN_PASSWORD' => 'a-long-test-password'] as $k => $v) {
-            putenv("$k=$v");
-            $_ENV[$k] = $_SERVER[$k] = $v;
-        }
         parent::setUp();
-    }
-
-    protected function tearDown(): void
-    {
-        parent::tearDown();
-        foreach (['DASHBOARD_REQUIRE_LOGIN', 'DASHBOARD_ADMIN_EMAIL', 'DASHBOARD_ADMIN_PASSWORD'] as $k) {
-            putenv($k);
-            unset($_ENV[$k], $_SERVER[$k]);
-        }
+        config([
+            'dashboard.require_login' => true,
+            'dashboard.admin.email' => 'owner@example.com',
+            'dashboard.admin.password' => 'a-long-test-password',
+        ]);
     }
 
     public function test_guests_are_sent_to_the_login(): void
