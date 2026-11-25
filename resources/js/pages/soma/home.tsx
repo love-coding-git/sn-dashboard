@@ -107,6 +107,38 @@ function bestBy(rows: MinerRow[]): Record<ScoreKey, { m: MinerRow; value: number
     return out;
 }
 
+/** Per score: each counted entry's place (1 = best) and the best value - the same entries bestBy() counts. */
+type RankTable = Record<ScoreKey, { place: Map<string, number>; n: number; best: number | null }>;
+
+function rankTables(rows: MinerRow[]): RankTable {
+    const out = {} as RankTable;
+    SCORE_KEYS.forEach((k) => {
+        const counted = rows
+            .filter((m) => {
+                const st = entryState(m);
+
+                return st !== 'out' && (k === 'stage1' || st === 'done') && scoresOf(m)[k] !== null;
+            })
+            .sort((a, b) => (scoresOf(b)[k] ?? 0) - (scoresOf(a)[k] ?? 0));
+        // tied scores share a place (1 + the entries strictly above)
+        const vals = counted.map((m) => scoresOf(m)[k] ?? 0);
+        out[k] = { place: new Map(counted.map((m, i) => [m.hotkey, vals.findIndex((x) => x === vals[i]) + 1])), n: counted.length, best: counted.length ? vals[0] : null };
+    });
+
+    return out;
+}
+
+/** "#3/140" and "-0.012" (or "top") for one of our scores; null when the entry is not counted (a partial value). */
+function placeText(t: RankTable, k: ScoreKey, m: MinerRow, value: number | null): { place: string; gap: string } | null {
+    const place = t[k].place.get(m.hotkey);
+    const best = t[k].best;
+    if (!place || value === null || best === null) {
+        return null;
+    }
+
+    return { place: `#${place}/${t[k].n}`, gap: place === 1 ? 'top' : `-${(best - value).toFixed(3)}` };
+}
+
 /** Passes against the baseline's passes on the finished runs of an entry (1 = same quality). */
 function qualityOf(m: MinerRow): { passed: number; base: number } {
     let passed = 0;
@@ -189,9 +221,10 @@ export default function Home(props: Props) {
         const famRows = [...fam.values()].filter((f) => f.done > 0).sort((a, b) => (b.best.stage2_score ?? -9) - (a.best.stage2_score ?? -9));
 
         const leaders = bestBy(miners);
+        const ranks = rankTables(miners);
         const oursBest = bestBy(ours);
 
-        return { leaders, oursBest, passers, done, rank, running, scoring, s1rank, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
+        return { leaders, oursBest, ranks, passers, done, rank, running, scoring, s1rank, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
     }, [miners]);
 
     const best = v.ours.find((m) => stateOf(m) === 'done') ?? null;
@@ -221,6 +254,9 @@ export default function Home(props: Props) {
                                                 <span className={cn('font-mono text-sm font-semibold tabular-nums', scoreTone(b.value))}>{signed(b.value)}</span>
                                                 <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">{b.m.our_label}</span>
                                             </a>
+                                        ) : null}
+                                        {b ? (
+                                            <PlaceLine t={v.ranks} k={k} m={b.m} value={b.value} partial={false} />
                                         ) : (
                                             <span className="text-sm text-muted-foreground">—</span>
                                         )}
@@ -288,7 +324,7 @@ export default function Home(props: Props) {
                 >
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                         {v.ours.map((m) => (
-                            <EntryCard key={m.hotkey} m={m} competition={competition.id} tasks={tasks} rank={v.rank.get(m.hotkey) ?? null} of={v.done.length} s1rank={v.s1rank.get(m.hotkey) ?? null} passers={v.passers.length} />
+                            <EntryCard key={m.hotkey} m={m} ranks={v.ranks} competition={competition.id} tasks={tasks} rank={v.rank.get(m.hotkey) ?? null} of={v.done.length} s1rank={v.s1rank.get(m.hotkey) ?? null} passers={v.passers.length} />
                         ))}
                     </div>
                 </Section>
@@ -455,7 +491,7 @@ function Hero(p: {
 
 // ------------------------------------------------------------------------------------------------ our entries
 
-function EntryCard({ m, competition, tasks, rank, of, s1rank, passers }: { m: MinerRow; competition: number; tasks: TaskRef[]; rank: number | null; of: number; s1rank: number | null; passers: number }) {
+function EntryCard({ m, ranks, competition, tasks, rank, of, s1rank, passers }: { m: MinerRow; ranks: RankTable; competition: number; tasks: TaskRef[]; rank: number | null; of: number; s1rank: number | null; passers: number }) {
     const state = stateOf(m);
     const pct = progressOf(m);
     const q = qualityOf(m);
@@ -539,11 +575,9 @@ function EntryCard({ m, competition, tasks, rank, of, s1rank, passers }: { m: Mi
 
                     return (
                         <div key={k} className="min-w-0" title={partial ? `${SCORE_LABEL[k]}: partial - runs without a result still count against it` : undefined}>
-                            <div className="truncate text-[10px] tracking-wide text-muted-foreground uppercase">
-                                {SCORE_LABEL[k]}
-                                {k === 'stage1' && s1rank !== null && <span className="ml-1 normal-case" title={`stage-1 rank of ${passers}`}>#{s1rank}</span>}
-                            </div>
+                            <div className="truncate text-[10px] tracking-wide text-muted-foreground uppercase">{SCORE_LABEL[k]}</div>
                             <div className={cn('font-mono text-xs font-medium tabular-nums', partial ? 'text-amber-600 dark:text-amber-400' : scoreTone(val))}>{signed(val)}</div>
+                            <PlaceLine t={ranks} k={k} m={m} value={val} partial={partial} />
                         </div>
                     );
                 })}
@@ -860,6 +894,26 @@ function HotkeyTable({ rows, competition }: { rows: Props['hotkeys']['ours']; co
                     })}
                 </tbody>
             </table>
+        </div>
+    );
+}
+
+/** Under one of our scores: its place among the counted entries, and the gap to the best (green "top" when first). */
+function PlaceLine({ t, k, m, value, partial }: { t: RankTable; k: ScoreKey; m: MinerRow; value: number | null; partial: boolean }) {
+    const pt = partial ? null : placeText(t, k, m, value);
+    if (!pt) {
+        return (
+            <div className="text-[10px] leading-tight text-muted-foreground">
+                <div>{partial ? 'partial' : '\u00a0'}</div>
+                <div>{'\u00a0'}</div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="font-mono text-[10px] leading-tight text-muted-foreground tabular-nums" title={`place among ${t[k].n} entries; the best is ${signed(t[k].best)}`}>
+            <div className="truncate">{pt.place}</div>
+            <div className={cn('truncate', pt.gap === 'top' ? 'text-emerald-600 dark:text-emerald-400' : '')}>{pt.gap === 'top' ? 'top' : `${pt.gap} to top`}</div>
         </div>
     );
 }
