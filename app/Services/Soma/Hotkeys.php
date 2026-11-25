@@ -45,7 +45,7 @@ class Hotkeys
     }
 
     /**
-     * Store one snapshot printed by scripts/chain_snapshot.py, with the state of each of our hotkeys.
+     * Store one metagraph snapshot (SyncHotkeys, from Taostats), with the state of each of our hotkeys.
      *
      * @param  array{netuid: int, block: int, immunity_period: int, neurons: array, ours: array<string, string>, notes?: array<string, string>}  $data
      */

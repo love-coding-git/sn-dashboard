@@ -89,13 +89,13 @@ return [
     // 2026-11-24: + npa34/default (round 14 submission 9) - the new coldkey npa34 also holds npa34/win and npa34/champion.
     'ours_hotkey_prefixes' => ['5HbfSFdn', '5CAvx57k', '5Gc9RZ62', '5DqL8KFA', '5G3iyRz1', '5ECfwqUX'],
 
-    // Chain data (Taostats). The API key is read from the workspace's .env at run time and never stored here.
+    // Chain data (Taostats). The API key comes from this app's own .env (TAO_API_KEY); it is never logged or stored.
     'netuid' => 114,
     'taostats_url' => env('TAOSTATS_URL', 'https://api.taostats.io'),
-    'keys_env' => env('SOMA_KEYS_ENV', base_path('../.env')),
+    'taostats_key' => (string) env('TAO_API_KEY', ''),
 
-    // The research workspace whose JSON files `soma:import` reads.
-    'miner_dir' => env('SOMA_MINER_DIR', base_path('../soma-miner')),
+    // Only for the one-off history import `soma:import` (the research workspace's JSON files); nothing reads it at run time.
+    'miner_dir' => env('SOMA_MINER_DIR'),
 
     // Owners linked by direct transfers count as one family (soma-miner/rounds/round11/docs/RIVALS11.md sections 4 and 10).
     'family_merges' => [
@@ -120,7 +120,7 @@ return [
     'family_link_wallet_kinds' => ['personal'],
 
     // Family names by family key (root coldkey prefix, or "ours"). Families without one take their team name from the
-    // SN114 team dossier (dossier_dir), else a stable generated name.
+    // SN114 team dossier (config/soma_teams.php), else a stable generated name.
     'family_names' => [
         'ours' => 'Ours',
         '5HankNTn' => 'SOMA-09',
@@ -138,7 +138,6 @@ return [
         '5FHrQMjz' => 'SN114 owner (uid 0)',
         '5H6Bck7G' => 'B operator (R11 winner, R12 1st)',
     ],
-    'dossier_dir' => env('SOMA_DOSSIER_DIR', base_path('../SN114-SOMA')),
 
     // Short notes shown next to known owners (first eight characters of the coldkey).
     'owner_labels' => [
@@ -169,10 +168,28 @@ return [
         'hotkeys' => (int) env('SOMA_POLL_HOTKEYS', 10),
     ],
 
-    // The Hotkeys page reads the chain itself (scripts/chain_snapshot.py, bittensor from the research workspace's venv); our
-    // hotkeys are the public *pub.txt files of soma-miner tools/prune_order.py, so the page and the submissions watch agree.
-    'chain' => [
-        'python' => env('SOMA_CHAIN_PYTHON', base_path('../soma-miner/.venv/bin/python')),
-        'script' => base_path('scripts/chain_snapshot.py'),
+    // The Hotkeys page: the netuid-114 metagraph from Taostats (the app's own API calls), the deregistration queue computed
+    // with the chain's immunity period, for our hotkeys below (public addresses, wallet/hotkey names). Until 2026-11-25 this
+    // came from a bittensor chain read and the research workspace's public key files; both are now in the app.
+    'immunity_period' => (int) env('SOMA_IMMUNITY_PERIOD', 5000),
+    'our_hotkeys' => [
+        '5CAvx57kosTwcCEe3DJSpyiyEVp4rETUw2FHRLkGwQ6kgDLg' => 'miner29/default',
+        '5DCXudirgQYstfTP5kPweYzrmXxwUjh3HcX87qEXNdtGjaWU' => 'miner29/entry4',
+        '5HDfKUPYqhtTbzwC3ipMKxrnYdPxRUYyn3wukktPEPQoJvyT' => 'miner29/entry5',
+        '5Gc9RZ62c9eYT3FbBoYJqujpB2M6oXer37KLx9XEWam2B2cu' => 'miner29/entry3',
+        '5HbfSFdnBz46DEHDMgsnEN9Lk8LK2cZinF2vvmYpb6Rzqa6X' => 'miner/default',
+        '5DqL8KFAnRJQnY6vDbC6eNRc1ghL9z5BrDmrr6RonDVfNZqQ' => 'miner30/entry1',
+        '5FNhe6NBH7GBU5fpzLnVPxwLzYsbJ3U66cLTn1msM3fJqhqf' => 'miner30/entry2',
+        '5EC7Z4sGepZLQTzu1NVAxrb6FjfvTEpMZJJLVwH74A1xdLNX' => 'miner30/entry3',
+        '5FhfqB8L6tL8Rg9ofpQuXbNfkqxxytWqF6HZfe8a16hWQ9D9' => 'miner30/winner1',
+        '5G3iyRz1bdv8V2QE3VUfJJ54hrcNu9oPhyyVPcTi8p8MbdUB' => 'miner30/winner',
+        '5ECfwqUXguwjeNTjanyzBGG2dVaJfu5MxMq69osZU7BvTLBe' => 'npa34/default',
+        '5DWmWwKKrxjV2WFjwAzG4AfJgKNQVj7RyvgRVZveQDiTSxnD' => 'npa34/win',
+        '5Hay9kinCrC68qH59d84M6r9ysm1vSLQ4fdrkDXyZkXf7dRC' => 'npa34/champion',
+    ],
+    // A note shown next to a hotkey (by name).
+    'hotkey_notes' => [
+        'miner/default' => 'round-11 review',
+        'miner29/entry3' => 'round-11 review',
     ],
 ];

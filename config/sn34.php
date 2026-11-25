@@ -55,13 +55,27 @@ return [
 
     // Our hosted route choices, flagged on every world card (provider/model:effort). From the NPA/34 bundle
     // data/local/20261116T1228Z_rzh9h/zip_models.json (13 entries).
-    'our_choices_file' => env('SN34_CHOICES_FILE', '/home/admin/projects/NPA/34/data/local/20261116T1228Z_rzh9h/zip_models.json'),
+    'our_choices' => [
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6-luna', 'effort' => 'medium'],
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6.1-sol', 'effort' => 'medium'],
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6.1-terra', 'effort' => 'medium'],
+        ['provider_id' => 'gm', 'model_id' => 'claude-sonnet-5-5', 'effort' => 'medium'],
+        ['provider_id' => 'gm', 'model_id' => 'claude-opus-5-5', 'effort' => 'medium'],
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6.1-sol', 'effort' => 'high'],
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6.1-terra', 'effort' => 'low'],
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6-luna', 'effort' => 'low'],
+        ['provider_id' => 'gm', 'model_id' => 'claude-haiku-5-5', 'effort' => 'medium'],
+        ['provider_id' => 'gm', 'model_id' => 'glm-5.3-flash', 'effort' => 'high'],
+        ['provider_id' => 'gm', 'model_id' => 'gpt-6.1-sol', 'effort' => 'low'],
+        ['provider_id' => 'engy', 'model_id' => 'glm-5.3', 'effort' => null],
+        ['provider_id' => 'engy', 'model_id' => 'glm-5.3', 'effort' => null],
+    ],
 
     // One-off history import written by NPA/34 tools/sn34_dashboard_feed.py --import-bundle.
-    'import_file' => env('SN34_IMPORT_FILE', '/home/admin/projects/NPA/34/data/dashboard/sn34_import.json'),
+    'import_file' => env('SN34_IMPORT_FILE'),
 
-    // Watch notes refreshed every minute by NPA/34 (WATCH / DISCORD rows, family notes); read on page load.
-    'notes_file' => env('SN34_NOTES_FILE', '/home/admin/projects/NPA/34/data/dashboard/sn34_feed.json'),
+    // The NPA/34 notes feed, only on the machine the watch runs on: `sn34:notes` loads it into the database every minute.
+    'notes_file' => env('SN34_NOTES_FILE'),
 
     // Owners merged into one family by hand: [[coldkey, coldkey, ...], ...]. Empty: families come from direct transfers.
     'family_merges' => [],

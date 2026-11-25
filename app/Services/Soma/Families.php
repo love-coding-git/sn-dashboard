@@ -189,31 +189,13 @@ class Families
     }
 
     /**
-     * Team names of the SN114 team dossier: coldkey => team (from each team file's "1. 구성" table).
+     * Team names of the SN114 team dossier: coldkey => team (config/soma_teams.php, copied from the dossier 2026-11-25).
      *
      * @return array<string, string>
      */
     private function dossierTeams(): array
     {
-        $out = [];
-        foreach (glob(rtrim((string) config('soma.dossier_dir'), '/').'/[0-9][0-9]-*.md') ?: [] as $file) {
-            if (! preg_match('/^\d\d-(.+)\.md$/', basename($file), $m) || in_array($m[1], ['INDEX', 'MONTHLY', 'COMP10-11'], true)) {
-                continue;
-            }
-            $inTable = false;
-            foreach (file($file, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
-                if (str_starts_with($line, '## ')) {
-                    $inTable = str_starts_with($line, '## 1.');
-
-                    continue;
-                }
-                if ($inTable && preg_match('/^\| `(5[1-9A-HJ-NP-Za-km-z]{47})`/', $line, $mm)) {
-                    $out[$mm[1]] = $m[1];
-                }
-            }
-        }
-
-        return $out;
+        return (array) config('soma_teams', []);
     }
 
     /**

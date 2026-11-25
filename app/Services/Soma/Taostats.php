@@ -7,8 +7,8 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Small Taostats client. The API key is read from the workspace's .env (config soma.keys_env) at run time;
- * it is never logged, stored in the database or sent anywhere but api.taostats.io.
+ * Small Taostats client. The API key comes from this app's .env (TAO_API_KEY, config soma.taostats_key); it is never
+ * logged, stored in the database or sent anywhere but api.taostats.io.
  */
 class Taostats
 {
@@ -73,19 +73,6 @@ class Taostats
 
     private function key(): string
     {
-        if ($this->key === null) {
-            $this->key = '';
-            $file = config('soma.keys_env');
-            if (is_string($file) && is_readable($file)) {
-                foreach (file($file, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
-                    if (str_starts_with($line, 'TAO_API_KEY=')) {
-                        $this->key = trim(substr($line, strlen('TAO_API_KEY=')), " \t\"'");
-                        break;
-                    }
-                }
-            }
-        }
-
-        return $this->key;
+        return $this->key ??= (string) config('soma.taostats_key');
     }
 }

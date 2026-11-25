@@ -1,0 +1,15 @@
+[Unit]
+Description=Subnet Watch scheduler - puts the polling jobs on the queues (routes/console.php)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+User=deploy
+Group=www-data
+WorkingDirectory=/var/www/sn-dashboard
+ExecStart=/usr/bin/php artisan schedule:work
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

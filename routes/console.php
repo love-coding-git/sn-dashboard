@@ -43,4 +43,8 @@ Schedule::call(fn () => FetchEarnings::dispatch((int) config('soma.netuid'), now
 Schedule::job(new Sn34Board, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.board')).' * * * *')->name('sn34-board')->withoutOverlapping();
 Schedule::job(new Sn34Runs, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.runs')).' * * * *')->name('sn34-runs')->withoutOverlapping();
 Schedule::job(new Sn34Card, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.card')).' * * * *')->name('sn34-card')->withoutOverlapping();
+// the NPA/34 watch notes into the database, only where the notes feed exists (the watch machine; the deployed copy has none)
+if (config('sn34.notes_file')) {
+    Schedule::command('sn34:notes')->everyMinute()->name('sn34-notes')->withoutOverlapping();
+}
 Schedule::job(new Sn34Metagraph, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.metagraph')).' * * * *')->name('sn34-metagraph')->withoutOverlapping();

@@ -1,0 +1,15 @@
+[Unit]
+Description=Subnet Watch queue worker 'sn34' - the SN34 (Yugos) reads
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+User=deploy
+Group=www-data
+WorkingDirectory=/var/www/sn-dashboard
+ExecStart=/usr/bin/php artisan queue:work --queue=sn34 --sleep=3 --tries=3 --timeout=950 --max-time=3600
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

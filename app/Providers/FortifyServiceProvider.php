@@ -50,6 +50,7 @@ class FortifyServiceProvider extends ServiceProvider
     {
         Fortify::loginView(fn (Request $request) => Inertia::render('auth/login', [
             'canResetPassword' => Features::enabled(Features::resetPasswords()),
+            'canRegister' => (bool) config('dashboard.allow_registration'),
             'status' => $request->session()->get('status'),
         ]));
 
@@ -67,9 +68,10 @@ class FortifyServiceProvider extends ServiceProvider
             'status' => $request->session()->get('status'),
         ]));
 
-        Fortify::registerView(fn () => Inertia::render('auth/register', [
-            'passwordRules' => Password::defaults()->toPasswordRulesString(),
-        ]));
+        // sign-up is closed unless DASHBOARD_ALLOW_REGISTRATION is set: the page sends you to the login
+        Fortify::registerView(fn () => config('dashboard.allow_registration')
+            ? Inertia::render('auth/register', ['passwordRules' => Password::defaults()->toPasswordRulesString()])
+            : redirect()->route('login'));
 
         Fortify::twoFactorChallengeView(fn () => Inertia::render('auth/two-factor-challenge'));
 

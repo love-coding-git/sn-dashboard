@@ -298,19 +298,13 @@ class Ingest
     }
 
     /**
-     * Our hosted route choices (required models plus the fallback) from config sn34.our_choices_file.
+     * Our hosted route choices (required models plus the fallback), config sn34.our_choices.
      *
      * @return array<int, array<string, mixed>>
      */
     public static function ourChoices(): array
     {
-        $file = (string) config('sn34.our_choices_file');
-        $spec = is_readable($file) ? json_decode((string) file_get_contents($file), true) : null;
-        if (! is_array($spec)) {
-            return [];
-        }
-
-        return array_values(array_merge($spec['required_models'] ?? [], isset($spec['fallback_model']) ? [$spec['fallback_model']] : []));
+        return array_values((array) config('sn34.our_choices', []));
     }
 
     /** hotkey => coldkey from the newest metagraph read and the traced owners (read once per job). */

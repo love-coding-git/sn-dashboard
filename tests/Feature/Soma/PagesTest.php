@@ -31,7 +31,7 @@ class PagesTest extends TestCase
             'runs' => [['pass_with_compression' => true, 'agent_steps' => 20, 'input_tokens_with_compression' => 100, 'cached_input_tokens_with_compression' => 1000, 'output_tokens_with_compression' => 50]],
         ]]);
 
-        $this->get('/')->assertRedirect(route('soma.overview'));
+        $this->get('/')->assertOk()->assertInertia(fn (Assert $page) => $page->component('hub'));
         $this->get(route('soma.overview'))->assertOk()->assertInertia(fn (Assert $page) => $page
             ->component('soma/overview')
             ->has('miners', 1)

@@ -9,10 +9,8 @@ class ExampleTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_home_opens_the_soma_overview()
+    public function test_home_is_the_cross_subnet_overview()
     {
-        $response = $this->get(route('home'));
-
-        $response->assertRedirect(route('soma.overview'));
+        $this->get(route('home'))->assertOk()->assertInertia(fn ($page) => $page->component('hub')->has('soma')->has('sn34'));
     }
 }

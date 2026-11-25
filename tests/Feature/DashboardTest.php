@@ -22,6 +22,6 @@ class DashboardTest extends TestCase
         $this->actingAs($user);
 
         $response = $this->get(route('dashboard'));
-        $response->assertRedirect(route('soma.overview'));
+        $response->assertRedirect(route('home'));
     }
 }

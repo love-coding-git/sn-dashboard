@@ -13,6 +13,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Props of the /sn34 page: the Yugos competition on one screen.
@@ -332,8 +333,9 @@ class Presenter
      */
     private function notes(): array
     {
-        $file = (string) config('sn34.notes_file');
-        $f = is_readable($file) ? json_decode((string) file_get_contents($file), true) : null;
+        // stored by `php artisan sn34:notes` (the page reads no outside file)
+        $row = DB::table('sn34_notes')->where('name', 'feed')->value('payload');
+        $f = $row ? json_decode((string) $row, true) : null;
         $en = $f['notes_en'] ?? [];
 
         return [

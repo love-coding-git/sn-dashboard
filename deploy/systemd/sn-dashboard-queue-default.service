@@ -1,0 +1,15 @@
+[Unit]
+Description=Subnet Watch queue worker 'default' - the leaderboard, miner pages and the metagraph (SOMA)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+User=deploy
+Group=www-data
+WorkingDirectory=/var/www/sn-dashboard
+ExecStart=/usr/bin/php artisan queue:work --queue=default --sleep=3 --tries=3 --timeout=600 --max-time=3600
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
