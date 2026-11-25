@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# SOMA watcher processes: queue worker "default" (dashboard + chain polling), queue worker "profile" (Taostats, slow
+# because of its rate limits: owner lookups, then owner tracing, then earnings - queues resolve, owners, profile in that order), the scheduler that puts the polling jobs on the queue, and the web server
+# (http://127.0.0.1:8000, local only).
+# Usage: bin/soma-watch start|stop|restart|status
+cd "$(dirname "$0")/.." || exit 1
+RUN=storage/run
+mkdir -p "$RUN" storage/logs
+
+alive() { [ -f "$RUN/$1.pid" ] && kill -0 "$(cat "$RUN/$1.pid")" 2>/dev/null; }
+
+start() {
+    local name=$1; shift
+    if alive "$name"; then echo "$name already running (pid $(cat "$RUN/$name.pid"))"; return; fi
+    # a new session, so the process outlives the terminal that started it; the inner shell records its pid, then execs
+    setsid bash -c 'echo $$ > "$0"; exec "$@"' "$RUN/$name.pid" "$@" >> "storage/logs/$name.log" 2>&1 < /dev/null &
+    sleep 1
+    echo "$name started (pid $(cat "$RUN/$name.pid"))"
+}
+
+stop() {
+    local name=$1
+    if alive "$name"; then kill "$(cat "$RUN/$name.pid")" && echo "$name stopped"; else echo "$name not running"; fi
+    rm -f "$RUN/$name.pid"
+}
+
+case "$1" in
+    start)
+        start queue-default php artisan queue:work --queue=default --sleep=3 --tries=3 --timeout=600
+        start queue-profile php artisan queue:work --queue=resolve,owners,profile --sleep=5 --tries=2 --timeout=950
+        # SN34 (Yugos) reads on their own worker, so a slow SN34 read never stops the SOMA queues (2026-11-25)
+        start queue-sn34 php artisan queue:work --queue=sn34 --sleep=5 --tries=1 --timeout=950
+        start schedule php artisan schedule:work
+        start web php artisan serve --host=127.0.0.1 --port=8000
+        ;;
+    stop)
+        stop web; stop schedule; stop queue-default; stop queue-profile; stop queue-sn34
+        ;;
+    restart)
+        "$0" stop; sleep 2; "$0" start
+        ;;
+    status)
+        for n in queue-default queue-profile queue-sn34 schedule web; do
+            if alive "$n"; then echo "$n running (pid $(cat "$RUN/$n.pid"))"; else echo "$n stopped"; fi
+        done
+        ;;
+    *)
+        echo "usage: $0 start|stop|restart|status"; exit 1
+        ;;
+esac
