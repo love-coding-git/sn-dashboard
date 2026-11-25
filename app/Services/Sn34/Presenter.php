@@ -327,26 +327,129 @@ class Presenter
     }
 
     /**
-     * NPA/34 watch notes from its notes file, English only (user 2026-11-25: 'show all with English'): the English rows
-     * sub_analysis writes (newest watch-loop stops, newest Discord rows) and the family notes' English text. The Korean
-     * originals stay in the NPA records and are not sent.
+     * The Watch log, the Discord rows and the family notes - all from this server's own data: the watch log is written
+     * from the SN34 events the jobs record (grouped by poll minute, newest first), the Discord rows are the channel's
+     * messages that SyncDiscord reads, the family notes stay as they came with the database.
      */
     private function notes(): array
     {
-        // stored by `php artisan sn34:notes` (the page reads no outside file)
         $row = DB::table('sn34_notes')->where('name', 'feed')->value('payload');
         $f = $row ? json_decode((string) $row, true) : null;
         $en = $f['notes_en'] ?? [];
+        $discord = DB::table('sn34_discord')->where('channel', (string) config('sn34.discord.channel'))
+            ->orderByDesc('posted_at')->orderByDesc('message_id')->limit(400)->get();
 
         return [
-            'generated_at' => $f['meta']['generated_at'] ?? null,
-            'watch_rows' => $en['watch'] ?? [],
-            'discord_rows' => $en['discord'] ?? [],
-            'loop_stops' => array_reverse($f['loop_stops'] ?? []),
+            'generated_at' => now()->toIso8601String(),
+            'watch_rows' => $this->watchRows(),
+            'discord_rows' => $discord->map(fn ($m) => [
+                Carbon::parse($m->posted_at)->utc()->format('m-d H:i'),
+                (string) ($m->author ?? ''),
+                trim(($m->reply_author ? '(reply to '.$m->reply_author.': "'.mb_strimwidth((string) $m->reply_text, 0, 90, '...').'") ' : '')
+                    .(string) $m->text.($m->edited_at ? ' (edited)' : '')),
+            ])->values()->all(),
+            'discord_count' => DB::table('sn34_discord')->where('channel', (string) config('sn34.discord.channel'))->count(),
+            'discord_newest' => $discord->first()?->posted_at ? Carbon::parse($discord->first()->posted_at)->utc()->toIso8601String() : null,
+            'loop_stops' => [],
             'family_notes' => collect($f['family_notes'] ?? [])->map(fn ($n) => [
                 'coldkeys' => $n['coldkeys'] ?? [], 'kind' => $n['kind'] ?? null, 'strength' => $n['strength'] ?? null,
                 'verdict' => $n['verdict'] ?? null, 'text' => $en['family_notes'][$n['kind'] ?? ''] ?? null, 'source' => $n['source'] ?? null,
             ])->filter(fn ($n) => $n['text'] !== null)->values()->all(),
         ];
+    }
+
+    /**
+     * The watch log: the SN34 events this server's jobs recorded, one row per poll minute (newest first): when, which
+     * reads saw something, what happened in plain words, and what deserves attention.
+     *
+     * @return array<int, array<int, string>>
+     */
+    private function watchRows(): array
+    {
+        $events = Event::orderByDesc('occurred_at')->orderByDesc('id')->limit(1500)->get();
+        $family = fn (?string $coldkey, ?string $hotkey) => $coldkey ? substr($coldkey, 0, 8) : ($hotkey ? 'hotkey '.substr($hotkey, 0, 8) : '?');
+        $ours = fn (?string $hotkey) => $hotkey !== null && collect(config('sn34.ours_hotkeys', []))->contains(fn ($p) => str_starts_with($hotkey, $p));
+        $num = fn ($v) => $v === null ? '-' : (($v >= 0 ? '+' : '').number_format((float) $v, 3));
+        $rows = [];
+        foreach ($events->groupBy(fn ($e) => $e->occurred_at->utc()->format('Y-m-d H:i')) as $minute => $group) {
+            $reads = [];
+            $what = [];
+            $alerts = [];
+            foreach ($group->sortBy('id') as $e) {
+                $d = $e->data ?? [];
+                $run = $e->run_id ? substr($e->run_id, 8, 8) : '';
+                $who = $family($e->coldkey, $e->hotkey);
+                if ($ours($e->hotkey)) {
+                    $alerts[] = 'our run '.$run;
+                }
+                switch ($e->type) {
+                    case 'new_run':
+                        $reads['runs'] = true;
+                        $what[] = "new run $run by $who (".($d['state'] ?? '?').(! empty($d['pack']) ? ', '.$d['pack'] : '').')';
+                        break;
+                    case 'state':
+                        $reads['runs'] = true;
+                        $what[] = "run $run ($who): ".($d['from'] ?? '?').' -> '.($d['to'] ?? '?');
+                        if (in_array($d['to'] ?? '', ['failed', 'error'], true)) {
+                            $alerts[] = "run $run ".($d['to'] ?? '').' (may still finish)';
+                        }
+                        break;
+                    case 'second_attempt':
+                        $reads['runs'] = true;
+                        $what[] = "run $run ($who): second attempt at its ungraded items";
+                        break;
+                    case 'ungraded_at_end':
+                        $reads['runs'] = true;
+                        $what[] = "run $run ($who): all ".($d['executed'] ?? '?').' items run, '.($d['ungraded'] ?? '?').' ungraded';
+                        break;
+                    case 'results_complete':
+                        $reads['runs'] = true;
+                        $what[] = "run $run ($who): results complete (".($d['graded'] ?? '?').' graded)';
+                        break;
+                    case 'verdict':
+                        $reads['board'] = true;
+                        $reasons = $d['reasons'] ?? [];
+                        $verdict = ! empty($d['promoted']) ? 'promoted to king' : (! empty($d['eligible']) ? 'eligible' : (! empty($d['near_miss']) ? 'near miss' : count($reasons).' gates failed'));
+                        $what[] = "decision $run ($who): $verdict, NV ".$num($d['net_value'] ?? null).', LB '.$num($d['lower_bound'] ?? null)
+                            .($reasons && empty($d['eligible']) ? ' - '.implode('; ', array_slice($reasons, 0, 3)) : '');
+                        if (! empty($d['promoted'])) {
+                            $alerts[] = "new king $run ($who)";
+                        } elseif (! empty($d['near_miss'])) {
+                            $alerts[] = "near miss $run ($who)";
+                        } elseif (! empty($d['eligible'])) {
+                            $alerts[] = "eligible $run ($who)";
+                        }
+                        break;
+                    case 'seats':
+                        $reads['board'] = true;
+                        $seats = collect($d['to'] ?? [])->map(fn ($x) => ($x[0] ?? '?').' '.substr((string) ($x[1] ?? ''), 0, 8).' share '.($x[3] ?? '-'))->implode(', ');
+                        $what[] = "seats changed: $seats";
+                        $alerts[] = 'seat change';
+                        break;
+                    case 'queue_error':
+                        $reads['board'] = true;
+                        $what[] = "run $run: queue error".(! empty($d['reason']) ? ' - '.$d['reason'] : '');
+                        $alerts[] = "queue error $run (may still finish)";
+                        break;
+                    case 'card':
+                    case 'card_choice':
+                        $reads['card'] = true;
+                        $moved = collect($d['moved'] ?? [])->map(fn ($m) => ($m['choice'] ?? '?').' '.json_encode($m['from'] ?? null).' -> '.json_encode($m['to'] ?? null))->implode('; ');
+                        $what[] = 'world card changed ('.($d['sha'] ?? '?').')'.($moved !== '' ? " - our routes moved: $moved" : '');
+                        if ($moved !== '') {
+                            $alerts[] = 'our routes moved on the card';
+                        }
+                        break;
+                    default:
+                        $what[] = $e->type.($run ? " $run" : '');
+                }
+            }
+            $rows[] = [$minute, implode(', ', array_keys($reads)), implode('. ', $what), implode('; ', array_unique($alerts))];
+            if (count($rows) >= 300) {
+                break;
+            }
+        }
+
+        return $rows;
     }
 }

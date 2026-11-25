@@ -55,5 +55,7 @@ sudo -u deploy bash -c 'cd /var/www/sn-dashboard && git pull && bash deploy/upda
 
 - Two copies polling at once (this server and a local copy) share the Taostats rate limit when they use the same key: stop
   the local watcher (`bin/soma-watch stop`) or give each copy its own key.
-- The SN34 watch notes are loaded by `php artisan sn34:notes` only where the NPA/34 notes feed exists (`SN34_NOTES_FILE`);
-  the server keeps the notes that came with the database dump.
+- The server works alone: no other machine sends it anything. The SN34 Watch log is written from its own reads; the
+  Discord tab is the Yugos channel that `SyncDiscord` reads every minute with `DISCORD_USER_TOKEN` from the server's
+  `.env` (a user token: reading a user account by script is against Discord's terms, so it only reads, at most one call
+  every 1.2 s). Without that token the Discord tab stays as it is.

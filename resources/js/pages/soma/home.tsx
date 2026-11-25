@@ -56,6 +56,57 @@ const progressOf = (m: MinerRow): number => stage2Progress(m);
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
+/**
+ * The nine scores of an entry: overall, stage 1, stage 2, the three bands and the three two-band elements (the mean of the
+ * two band values, as the family table counts them). Overall and the bands are the platform's once scored, else the
+ * running values over the tasks done (live). While an entry still runs or is being scored those values are partial.
+ */
+const SCORE_KEYS = ['overall', 'stage1', 'stage2', 'short', 'medium', 'long', 's+m', 's+l', 'm+l'] as const;
+type ScoreKey = (typeof SCORE_KEYS)[number];
+const SCORE_LABEL: Record<ScoreKey, string> = { overall: 'overall', stage1: 'stage 1', stage2: 'stage 2', short: 'short', medium: 'medium', long: 'long', 's+m': 's+m', 's+l': 's+l', 'm+l': 'm+l' };
+
+function scoresOf(m: MinerRow): Record<ScoreKey, number | null> {
+    const band = (b: 'short' | 'medium' | 'long') => m.categories?.[b] ?? m.live?.[b] ?? null;
+    const pair = (a: number | null, b: number | null) => (a === null || b === null ? null : (a + b) / 2);
+    const [short, medium, long] = [band('short'), band('medium'), band('long')];
+
+    return {
+        overall: m.overall ?? m.live?.overall ?? null,
+        stage1: m.stage1_score ?? null,
+        stage2: m.stage2_score ?? null,
+        short,
+        medium,
+        long,
+        's+m': pair(short, medium),
+        's+l': pair(short, long),
+        'm+l': pair(medium, long),
+    };
+}
+
+/** A partial value (the entry still runs or is being scored): every score but stage 1. */
+const isPartial = (m: MinerRow, key: ScoreKey) => key !== 'stage1' && (entryState(m) === 'running' || entryState(m) === 'scoring');
+
+/** The best entry for each score: stage 1 among the stage-1 passers, the rest among the fully scored entries. */
+function bestBy(rows: MinerRow[]): Record<ScoreKey, { m: MinerRow; value: number } | null> {
+    const out = {} as Record<ScoreKey, { m: MinerRow; value: number } | null>;
+    SCORE_KEYS.forEach((k) => {
+        let best: { m: MinerRow; value: number } | null = null;
+        rows.forEach((m) => {
+            const st = entryState(m);
+            if (st === 'out' || (k !== 'stage1' && st !== 'done')) {
+                return;
+            }
+            const v = scoresOf(m)[k];
+            if (v !== null && (best === null || v > best.value)) {
+                best = { m, value: v };
+            }
+        });
+        out[k] = best;
+    });
+
+    return out;
+}
+
 /** Passes against the baseline's passes on the finished runs of an entry (1 = same quality). */
 function qualityOf(m: MinerRow): { passed: number; base: number } {
     let passed = 0;
@@ -137,7 +188,10 @@ export default function Home(props: Props) {
         });
         const famRows = [...fam.values()].filter((f) => f.done > 0).sort((a, b) => (b.best.stage2_score ?? -9) - (a.best.stage2_score ?? -9));
 
-        return { passers, done, rank, running, scoring, s1rank, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
+        const leaders = bestBy(miners);
+        const oursBest = bestBy(ours);
+
+        return { leaders, oursBest, passers, done, rank, running, scoring, s1rank, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
     }, [miners]);
 
     const best = v.ours.find((m) => stateOf(m) === 'done') ?? null;
@@ -151,22 +205,33 @@ export default function Home(props: Props) {
         <>
             <Head title={`Round ${competition.round ?? competition.id}`} />
             <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 p-4 md:p-6">
-                <Hero competition={competition} phase={phase} now={now} end={end} uploadEnd={uploadEnd} done={v.done.length} running={v.running.length} scoring={v.scoring.length} passers={v.passers.length} entries={miners.length} watcher={watcher} pending={pending} />
+                <Hero leaders={v.leaders} competition={competition} phase={phase} now={now} end={end} uploadEnd={uploadEnd} done={v.done.length} running={v.running.length} scoring={v.scoring.length} passers={v.passers.length} entries={miners.length} watcher={watcher} pending={pending} />
 
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                     <Kpi icon={Trophy} title="Our best now" tone="indigo">
-                        {best ? (
-                            <>
-                                <div className="flex items-baseline gap-2">
-                                    <span className="text-3xl font-semibold tabular-nums">{signed(best.stage2_score)}</span>
-                                    <Pill tone="indigo">{best.our_label}</Pill>
-                                </div>
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                    #{v.rank.get(best.hotkey)} of {v.done.length} fully scored · top {signed(v.done[0]?.stage2_score)} · median {signed(v.median)}
-                                </p>
-                            </>
-                        ) : (
-                            <p className="text-sm text-muted-foreground">no entry of ours has finished stage 2 yet</p>
+                        <div className="grid grid-cols-3 gap-x-3 gap-y-1">
+                            {SCORE_KEYS.map((k) => {
+                                const b = v.oursBest[k];
+
+                                return (
+                                    <div key={k} className="min-w-0">
+                                        <div className="text-[10px] tracking-wide text-muted-foreground uppercase">{SCORE_LABEL[k]}</div>
+                                        {b ? (
+                                            <a href={somaUrl(competition.id, b.m.hotkey)} target="_blank" rel="noopener noreferrer" className="flex items-baseline gap-1 hover:underline">
+                                                <span className={cn('font-mono text-sm font-semibold tabular-nums', scoreTone(b.value))}>{signed(b.value)}</span>
+                                                <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">{b.m.our_label}</span>
+                                            </a>
+                                        ) : (
+                                            <span className="text-sm text-muted-foreground">—</span>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        {best && (
+                            <p className="mt-2 text-xs text-muted-foreground">
+                                stage 2: #{v.rank.get(best.hotkey)} of {v.done.length} fully scored · top {signed(v.done[0]?.stage2_score)} · median {signed(v.median)}
+                            </p>
                         )}
                     </Kpi>
                     <Kpi icon={Sparkles} title="Our entries" tone="violet">
@@ -280,6 +345,7 @@ Home.layout = {
 // ------------------------------------------------------------------------------------------------ hero
 
 function Hero(p: {
+    leaders: Record<ScoreKey, { m: MinerRow; value: number } | null>;
     competition: CompetitionInfo;
     phase: Phase;
     now: number;
@@ -315,6 +381,34 @@ function Hero(p: {
                     <p className="mt-1 text-sm text-white/80">
                         competition {p.competition.id} · {p.entries} entries · {p.passers} passed stage 1
                     </p>
+                </div>
+                <div className="min-w-0 flex-1 basis-[520px]">
+                    <div className="mb-1.5 text-[11px] font-medium tracking-[0.18em] text-white/70 uppercase">top of the round · click opens thesoma.ai</div>
+                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                        {SCORE_KEYS.map((k) => {
+                            const b = p.leaders[k];
+
+                            return b ? (
+                                <a
+                                    key={k}
+                                    href={somaUrl(p.competition.id, b.m.hotkey)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex min-w-0 items-center gap-2 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs backdrop-blur transition hover:bg-white/20"
+                                    title={`${SCORE_LABEL[k]}: ${b.m.family_name ?? ''} ${b.m.hotkey}`}
+                                >
+                                    <span className="w-12 shrink-0 text-white/70">{SCORE_LABEL[k]}</span>
+                                    <span className="shrink-0 font-mono font-semibold tabular-nums">{signed(b.value)}</span>
+                                    <span className="min-w-0 truncate text-white/85">{b.m.is_ours ? (b.m.our_label ?? 'ours') : (b.m.family_name ?? '')}</span>
+                                    <span className="ml-auto shrink-0 font-mono text-[11px] text-white/70">{b.m.hotkey.slice(0, 8)}</span>
+                                </a>
+                            ) : (
+                                <span key={k} className="flex items-center gap-2 rounded-lg bg-white/5 px-2.5 py-1.5 text-xs text-white/50">
+                                    <span className="w-12 shrink-0">{SCORE_LABEL[k]}</span>—
+                                </span>
+                            );
+                        })}
+                    </div>
                 </div>
                 <div className="text-right">
                     <div className="flex items-center justify-end gap-2 text-xs font-medium tracking-[0.2em] text-white/70 uppercase">
@@ -367,6 +461,7 @@ function EntryCard({ m, competition, tasks, rank, of, s1rank, passers }: { m: Mi
     const q = qualityOf(m);
     const qShare = q.base > 0 ? q.passed / q.base : null;
     const top = state === 'done' && rank !== null && of > 0 ? rank / of : null;
+    const scores = scoresOf(m);
 
     return (
         <div
@@ -434,17 +529,24 @@ function EntryCard({ m, competition, tasks, rank, of, s1rank, passers }: { m: Mi
                         <div className="text-2xl font-semibold text-muted-foreground">not started</div>
                     </div>
                 )}
-                {state !== 'running' && state !== 'scoring' && (
-                    <div className="text-right">
-                        <div className="text-xs text-muted-foreground">stage 1</div>
-                        <div className="font-mono text-sm tabular-nums">{signed(m.stage1_score)}</div>
-                        {s1rank !== null && (
-                            <div className="text-[11px] text-muted-foreground">
-                                #{s1rank} of {passers}
+            </div>
+
+            {/* the nine scores; a partial value (still running or being scored) is amber */}
+            <div className="relative z-10 grid grid-cols-3 gap-x-2 gap-y-1 rounded-lg bg-muted/40 p-2">
+                {SCORE_KEYS.map((k) => {
+                    const val = scores[k];
+                    const partial = val !== null && isPartial(m, k);
+
+                    return (
+                        <div key={k} className="min-w-0" title={partial ? `${SCORE_LABEL[k]}: partial - runs without a result still count against it` : undefined}>
+                            <div className="truncate text-[10px] tracking-wide text-muted-foreground uppercase">
+                                {SCORE_LABEL[k]}
+                                {k === 'stage1' && s1rank !== null && <span className="ml-1 normal-case" title={`stage-1 rank of ${passers}`}>#{s1rank}</span>}
                             </div>
-                        )}
-                    </div>
-                )}
+                            <div className={cn('font-mono text-xs font-medium tabular-nums', partial ? 'text-amber-600 dark:text-amber-400' : scoreTone(val))}>{signed(val)}</div>
+                        </div>
+                    );
+                })}
             </div>
 
             <div className="relative z-10 grid grid-cols-6 gap-1">

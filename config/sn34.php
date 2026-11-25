@@ -74,8 +74,20 @@ return [
     // One-off history import written by NPA/34 tools/sn34_dashboard_feed.py --import-bundle.
     'import_file' => env('SN34_IMPORT_FILE'),
 
-    // The NPA/34 notes feed, only on the machine the watch runs on: `sn34:notes` loads it into the database every minute.
-    'notes_file' => env('SN34_NOTES_FILE'),
+    // The Yugos Discord channel (#34 mind, Bittensor server), read by SyncDiscord every minute through Discord's REST API
+    // with the owner's user token (the reader of ai_tr/tools/discord_watch.py, moved here 2026-11-25). The token is read
+    // from .env only and never logged. Reading with a user account is against Discord's terms: read only, slowly.
+    'discord' => [
+        'token' => (string) env('DISCORD_USER_TOKEN', ''),
+        'guild' => env('SN34_DISCORD_GUILD', '799672011265015819'),
+        'channel' => env('SN34_DISCORD_CHANNEL', '1247680967225905273'),
+        // the first read fetches every message since this day (UTC)
+        'since' => env('SN34_DISCORD_SINCE', '2026-10-01'),
+        'api' => env('DISCORD_API_BASE', 'https://discord.com/api/v10'),
+        'min_gap_seconds' => 1.2,
+        'max_pages' => 30,
+    ],
+
 
     // Owners merged into one family by hand: [[coldkey, coldkey, ...], ...]. Empty: families come from direct transfers.
     'family_merges' => [],

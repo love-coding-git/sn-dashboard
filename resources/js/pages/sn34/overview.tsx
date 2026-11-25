@@ -44,7 +44,7 @@ type OurHotkey = {
     immune: boolean | null; immunity_left_hours: number | null; in_danger: boolean | null; place: number | null;
     last_run: { run: string; state: string; enqueued_at: string | null; eligible: boolean | null; promoted: boolean | null; nv: number | null } | null;
 };
-type Notes = { generated_at: string | null; watch_rows: string[][]; discord_rows: string[][]; loop_stops: { log: string; line: string }[]; family_notes: { coldkeys: string[]; kind: string; strength: string; verdict: string; text: string; source: string }[] };
+type Notes = { generated_at: string | null; watch_rows: string[][]; discord_rows: string[][]; discord_count?: number; discord_newest?: string | null; loop_stops: { log: string; line: string }[]; family_notes: { coldkeys: string[]; kind: string; strength: string; verdict: string; text: string; source: string }[] };
 
 type Props = {
     board: { confirmed_at: string | null; policy: string | null; phase: string | null; paused: boolean | null; weights: Record<string, number>; floors: Record<string, { quality: number | null; hard: number | null; private: number | null }>; queue: { run_id: string; hotkey: string; state: string; reason: string | null }[]; read_at: string | null } | null;
@@ -658,11 +658,11 @@ export default function Sn34Overview(props: Props) {
                     </TabsContent>
 
                     <TabsContent value="watch" className="flex min-h-0 flex-col gap-2">
-                        <NotesTable rows={notes.watch_rows} heads={['when (UTC)', 'reads', 'what happened', 'alerts']} note={`NPA/34 watch-loop stops, newest first, in English (notes file ${utc(notes.generated_at, true)}); older stops are in the NPA/34 records (Docs/WATCH.md section 2)`} />
+                        <NotesTable rows={notes.watch_rows} heads={['when (UTC)', 'reads', 'what happened', 'alerts']} note="Written by this dashboard from its own reads (board every 2 min, runs every minute, world card every 10 min): one row per minute in which something changed, newest first" />
                     </TabsContent>
 
                     <TabsContent value="discord" className="flex min-h-0 flex-col gap-2">
-                        <NotesTable rows={notes.discord_rows} heads={['when (UTC)', 'what was said (translated) and what it means']} note="#34 mind (Yugos Discord), newest first, English versions of NPA/34 Docs/DISCORD.md section 1; older rows are in the NPA/34 records" />
+                        <NotesTable rows={notes.discord_rows} heads={['when (UTC)', 'author', 'message']} note={`#34 mind (the Yugos channel of the Bittensor Discord), read by this dashboard every minute: the newest ${notes.discord_rows.length} of ${notes.discord_count ?? notes.discord_rows.length} messages, as written (newest ${utc(notes.discord_newest ?? null, true)})`} />
                     </TabsContent>
                 </Tabs>
             </div>
