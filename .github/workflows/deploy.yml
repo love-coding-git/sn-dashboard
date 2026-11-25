@@ -1,0 +1,75 @@
+# Push to main -> test and build -> deploy to dashboard.reservakit.com (the reservakit server).
+# The deploy step logs in as the server's deploy user with a key that can do one thing only: the server's authorized_keys
+# entry forces `cd /var/www/sn-dashboard && git pull --ff-only -q && bash deploy/update.sh`, whatever command is sent.
+# Repo secrets: SERVER_IP (142.248.82.243) and SSH_PRIVATE_KEY (the private half of that key).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite, sqlite3, intl, bcmath, zip
+          coverage: none
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install PHP packages
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare the app
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Build the front end
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Tests
+        run: php artisan test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -t ed25519 "$SERVER_IP" >> ~/.ssh/known_hosts 2>/dev/null
+          # the server runs its forced deploy command; its output is the log of this step
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "deploy@$SERVER_IP" deploy
+
+      - name: Check the site
+        run: |
+          sleep 5
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://dashboard.reservakit.com/up)
+          echo "https://dashboard.reservakit.com/up -> $code"
+          test "$code" = 200

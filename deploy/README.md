@@ -35,7 +35,17 @@ database, its own API calls (thesoma.ai, Taostats, Yugos). Every page needs the 
 7. **Build and start** (as deploy): `cd /var/www/sn-dashboard && bash deploy/update.sh`
 8. **TLS** (as root, after DNS resolves): `certbot --nginx -d dashboard.reservakit.com`
 
-## Updating
+## Automatic deploys (GitHub Actions)
+
+`.github/workflows/deploy.yml`: every push to `main` runs the tests and the build, then logs in as the server's `deploy` user
+with a key that can only deploy - its `authorized_keys` entry forces
+`cd /var/www/sn-dashboard && git pull --ff-only -q && bash deploy/update.sh` - and finally checks `https://dashboard.reservakit.com/up`.
+Repo secrets: `SERVER_IP` = `142.248.82.243`, `SSH_PRIVATE_KEY` = the private key whose public half is that entry
+(`sn-dashboard-github-actions`). Run it by hand from Actions -> Deploy -> Run workflow.
+
+After certbot, the live nginx site holds the TLS blocks: do not copy `deploy/nginx/…conf` over it again (or rerun certbot).
+
+## Updating by hand
 
 ```bash
 sudo -u deploy bash -c 'cd /var/www/sn-dashboard && git pull && bash deploy/update.sh'

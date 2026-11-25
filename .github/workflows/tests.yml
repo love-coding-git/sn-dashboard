@@ -1,9 +1,7 @@
 name: tests
 
+# Pull requests only: a push to main is tested by deploy.yml before it deploys.
 on:
-  push:
-    branches:
-      - main
   pull_request:
 
 permissions:

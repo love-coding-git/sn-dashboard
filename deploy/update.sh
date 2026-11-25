@@ -4,14 +4,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-grep -q '^APP_KEY=base64:' .env || php artisan key:generate --force
-
 composer install --no-dev --optimize-autoloader --no-interaction
+grep -q '^APP_KEY=base64:' .env || php artisan key:generate --force
 npm ci --no-audit --no-fund
 npm run build
 
 php artisan migrate --force
-php artisan dashboard:admin
+# the login account from .env (skipped with a warning until DASHBOARD_ADMIN_EMAIL / _PASSWORD are filled in)
+php artisan dashboard:admin || echo 'warning: login account not written - fill DASHBOARD_ADMIN_* in .env and run php artisan dashboard:admin'
 php artisan optimize:clear
 php artisan config:cache
 php artisan view:cache
