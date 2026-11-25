@@ -1,14 +1,14 @@
 <?php
 
-use App\Jobs\Soma\FetchEarnings;
-use App\Jobs\Soma\SyncHotkeys;
-use App\Jobs\Soma\SyncLeaderboard;
-use App\Jobs\Soma\SyncMetagraph;
 use App\Jobs\Sn34\SyncBoard as Sn34Board;
 use App\Jobs\Sn34\SyncCard as Sn34Card;
 use App\Jobs\Sn34\SyncDiscord as Sn34Discord;
 use App\Jobs\Sn34\SyncMetagraph as Sn34Metagraph;
 use App\Jobs\Sn34\SyncRuns as Sn34Runs;
+use App\Jobs\Soma\FetchEarnings;
+use App\Jobs\Soma\SyncHotkeys;
+use App\Jobs\Soma\SyncLeaderboard;
+use App\Jobs\Soma\SyncMetagraph;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -44,6 +44,7 @@ Schedule::call(fn () => FetchEarnings::dispatch((int) config('soma.netuid'), now
 Schedule::job(new Sn34Board, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.board')).' * * * *')->name('sn34-board')->withoutOverlapping();
 Schedule::job(new Sn34Runs, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.runs')).' * * * *')->name('sn34-runs')->withoutOverlapping();
 Schedule::job(new Sn34Card, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.card')).' * * * *')->name('sn34-card')->withoutOverlapping();
-// the Yugos Discord channel, read by the server itself (DISCORD_USER_TOKEN in its .env; nothing happens without it)
-Schedule::job(new Sn34Discord, 'sn34')->everyMinute()->name('sn34-discord')->withoutOverlapping();
+// the Yugos Discord channel, read by the server itself (DISCORD_USER_TOKEN in its .env; nothing happens without it) at
+// random 10 - 30 minute intervals: the tick only queues the next read for the second it is due
+Schedule::call(fn () => Sn34Discord::tick())->everyMinute()->name('sn34-discord-tick')->withoutOverlapping();
 Schedule::job(new Sn34Metagraph, 'sn34')->cron('*/'.max(1, (int) config('sn34.poll.metagraph')).' * * * *')->name('sn34-metagraph')->withoutOverlapping();

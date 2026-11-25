@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Http;
 
 /**
  * Reads one Discord text channel through the REST API with the owner's user token (config sn34.discord.token) - the
- * reader of ai_tr/tools/discord_watch.py in PHP: at least 1.2 s between calls, a 429 waits for Discord's retry_after,
+ * reader of ai_tr/tools/discord_watch.py in PHP: a random 1.5 - 4 s between calls, a 429 waits for Discord's retry_after,
  * a 5xx or a network failure backs off. A failure comes back as ['_error' => ...], never as an exception carrying the
  * cURL text (that reads as a lost database connection to the queue worker). The token is never logged.
  */
@@ -37,7 +37,9 @@ class DiscordReader
         $url = rtrim((string) config('sn34.discord.api'), '/').$path;
         $error = 'no response after retries';
         for ($attempt = 0; $attempt < 6; $attempt++) {
-            $pause = (float) config('sn34.discord.min_gap_seconds', 1.2) - (microtime(true) - $this->last);
+            $min = (float) config('sn34.discord.min_gap_seconds', 1.5);
+            $gap = $min + mt_rand() / mt_getrandmax() * max(0.0, (float) config('sn34.discord.max_gap_seconds', 4.0) - $min);
+            $pause = $gap - (microtime(true) - $this->last);
             if ($pause > 0) {
                 usleep((int) ($pause * 1e6));
             }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Sn34;
 
+use App\Jobs\Sn34\SyncDiscord;
 use App\Models\Sn34\Board;
 use App\Models\Sn34\Card;
 use App\Models\Sn34\Event;
@@ -350,6 +351,8 @@ class Presenter
             ])->values()->all(),
             'discord_count' => DB::table('sn34_discord')->where('channel', (string) config('sn34.discord.channel'))->count(),
             'discord_newest' => $discord->first()?->posted_at ? Carbon::parse($discord->first()->posted_at)->utc()->toIso8601String() : null,
+            'discord_read_at' => ($t = Cache::get(SyncDiscord::READ_KEY)) ? Carbon::createFromTimestamp((int) $t)->utc()->toIso8601String() : null,
+            'discord_next_at' => ($t = Cache::get(SyncDiscord::NEXT_KEY)) ? Carbon::createFromTimestamp((int) $t)->utc()->toIso8601String() : null,
             'loop_stops' => [],
             'family_notes' => collect($f['family_notes'] ?? [])->map(fn ($n) => [
                 'coldkeys' => $n['coldkeys'] ?? [], 'kind' => $n['kind'] ?? null, 'strength' => $n['strength'] ?? null,
