@@ -21,7 +21,7 @@ class HubController extends Controller
     {
         return Inertia::render('hub', [
             // cached as plain arrays: this app's cache does not unserialize objects (a Collection came back as an incomplete class)
-            'soma' => Cache::remember('hub:soma:v3', 60, fn () => self::plain($this->soma($soma) + ['hotkeys' => self::hotkeys($hotkeys)])),
+            'soma' => Cache::remember('hub:soma:v4', 60, fn () => self::plain($this->soma($soma) + ['hotkeys' => self::hotkeys($hotkeys)])),
             'sn34' => Cache::remember('hub:sn34:v3', 60, fn () => self::plain($sn34->summary())),
         ]);
     }
@@ -57,6 +57,9 @@ class HubController extends Controller
             return [
                 'hotkey' => $m['hotkey'] ?? null, 'is_ours' => (bool) ($m['is_ours'] ?? false), 'our_label' => $m['our_label'] ?? null,
                 'status' => $m['status'] ?? null, 'stage1_score' => $m['stage1_score'] ?? null, 'stage2_score' => $m['stage2_score'] ?? null,
+                // the full evaluation: the platform's overall once scored, the runs scored so far, our running estimate
+                'overall' => $m['overall'] ?? null, 'full_progress' => $m['full_progress'] ?? null,
+                'live' => isset($m['live']) ? ['overall' => $m['live']['overall'] ?? null, 'tasks' => $m['live']['tasks'] ?? 0] : null,
                 'family' => $m['family'] ?? null, 'family_name' => $m['family_name'] ?? null, 'coldkey' => $m['coldkey'] ?? null,
                 'stage2' => collect($m['stage2'] ?? [])->map(fn ($c) => [
                     'finished' => $c['finished'] ?? 0, 'total' => $c['total'] ?? null, 'score' => $c['score'] ?? null,

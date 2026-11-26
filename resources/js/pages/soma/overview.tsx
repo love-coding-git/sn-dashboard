@@ -22,7 +22,7 @@ import type { SortColumn, SortState } from '@/hooks/use-sort';
 import { useSort } from '@/hooks/use-sort';
 import { useTab } from '@/hooks/use-tab';
 import { ago, BAND_TONE, left, num, PROBLEM_SHORT, shortKey, shortTask, STATUS_DOT, utc } from '@/lib/soma';
-import { entryState, somaUrl, stage2Progress } from '@/lib/soma-state';
+import { entryState, fullProgressShare, fullState, somaUrl, stage2Progress } from '@/lib/soma-state';
 import { cn } from '@/lib/utils';
 import { home as homeRoute, miner as minerRoute, overview as overviewRoute } from '@/routes/soma';
 import type { CompetitionInfo, CutInfo, EarningRow, EarningsCoverage, FamilySummary, FullProgress, LiveScore, MinerRow, Phase, TaskRef, WatcherInfo, WatchEvent } from '@/types';
@@ -98,6 +98,11 @@ export default function Overview(props: Props) {
     const scored = props.phase === 'scored';
     // stage 2 or the full evaluation runs: the stage-2 score and rank are what decide and what to look at
     const evalPhase = props.phase === 'stage2' || props.phase === 'full';
+    // the full evaluation runs: an entry's overall is final once the platform scored it ("scored" with an overall), and
+    // ranks are taken among those entries only (2026-11-26: the page kept showing stage-2 ranks while entries were scored)
+    const fullPhase = props.phase === 'full';
+    const fullDone = useMemo(() => miners.filter((m) => fullState(m) === 'done').sort((a, b) => (b.overall ?? 0) - (a.overall ?? 0)), [miners]);
+    const fullRank = useMemo(() => new Map(fullDone.map((m, i) => [m.hotkey, i + 1])), [fullDone]);
     const ours = miners.filter((m) => m.is_ours).sort((a, b) => labelNo(a) - labelNo(b));
     const deadline = competition.upload_deadline_at ? new Date(competition.upload_deadline_at).getTime() : null;
     const pending = Object.values(watcher.pending ?? {}).reduce((a, b) => a + b, 0);
@@ -138,7 +143,7 @@ export default function Overview(props: Props) {
             return shares.length ? Math.min(...shares) : null;
         };
         const columns: Record<string, SortColumn<MinerRow>> = {
-            rank: { value: (m) => (evalPhase ? (m.stage2_rank ?? null) : (m.place ?? m.rank)) },
+            rank: { value: (m) => (fullPhase ? (fullRank.get(m.hotkey) ?? null) : evalPhase ? (m.stage2_rank ?? null) : (m.place ?? m.rank)) },
             stage2rank: { value: (m) => m.stage2_rank ?? null },
             progress: { value: (m) => progressShare(m.full_progress), first: 'desc' },
             entry: { value: (m) => labelNo(m) },
@@ -155,7 +160,7 @@ export default function Overview(props: Props) {
             stage1rank: { value: (m) => (scored ? m.place : m.rank) },
             s1rank: { value: (m) => m.rank ?? null },
             // rank in the current phase: final place once scored, stage-2 rank while it decides, stage-1 rank before
-            now: { value: (m) => (scored ? m.place : evalPhase ? m.stage2_rank : m.rank) ?? null },
+            now: { value: (m) => (scored ? m.place : fullPhase ? fullRank.get(m.hotkey) : evalPhase ? m.stage2_rank : m.rank) ?? null },
             steps: { value: (m) => m.fingerprint?.u_steps_x ?? m.fingerprint?.steps_x },
             earlier: { value: earlier },
             uploaded: { value: (m) => m.last_submit_at, first: 'desc' },
@@ -165,7 +170,7 @@ export default function Overview(props: Props) {
         fullTasks.forEach((t) => (columns[`fe:${t.name}`] = { value: (m) => m.full?.[t.name]?.score, first: 'desc' }));
 
         return columns;
-    }, [scored, evalPhase, familySize, problems, stage2Tasks, fullTasks]);
+    }, [scored, evalPhase, fullPhase, fullRank, familySize, problems, stage2Tasks, fullTasks]);
     // what the family tables rank by: the full-evaluation value once it runs, the stage-2 score while stage 2 runs, else stage 1
     const famStage: 'full' | 'stage2' | 'stage1' = scored || props.phase === 'full' ? 'full' : props.phase === 'stage2' ? 'stage2' : 'stage1';
     const familyColumns = useMemo(() => {
@@ -227,11 +232,11 @@ export default function Overview(props: Props) {
     const ea = useSort('earn', earnings, earningColumns);
     const by = (x: { sort: typeof lb.sort; toggle: (key: string) => void }) => ({ sort: x.sort, onSort: x.toggle });
     const href = (hotkey: string) => minerRoute({ competition: competition.id, hotkey });
-    const scoreOf = (m: MinerRow) => (scored ? m.overall : evalPhase ? m.stage2_score : m.stage1_score);
+    const scoreOf = (m: MinerRow) => (scored ? m.overall : fullPhase ? (fullRank.has(m.hotkey) ? m.overall : null) : evalPhase ? m.stage2_score : m.stage1_score);
     const rankOf = (m: MinerRow) => (scored ? m.place : evalPhase ? m.stage2_rank : m.rank);
     const ranked = evalPhase ? miners.filter((m) => m.stage2_rank !== null && m.stage2_rank !== undefined).length : miners.filter((m) => scoreOf(m) !== null).length;
     const stage2Count = miners.filter((m) => m.stage2_rank !== null && m.stage2_rank !== undefined).length;
-    const runTotals = fullRows.reduce((a, m) => ({ run: a.run + (m.full_progress?.run ?? 0), planned: a.planned + (m.full_progress?.planned ?? 0) }), { run: 0, planned: 0 });
+    const runTotals = fullRows.reduce((a, m) => ({ graded: a.graded + (m.full_progress?.graded ?? 0), planned: a.planned + (m.full_progress?.planned ?? 0) }), { graded: 0, planned: 0 });
     const leaders = [...miners]
         .filter((m) => scoreOf(m) !== null && (evalPhase || scored || !isLive(m)))
         .sort((a, b) => (scoreOf(b) ?? 0) - (scoreOf(a) ?? 0))
@@ -338,6 +343,10 @@ export default function Overview(props: Props) {
                                 {ours.map((m) => (
                                     <a key={m.id} href={somaUrl(competition.id, m.hotkey)} target="_blank" rel="noopener noreferrer" className="-mx-1 flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted/70">
                                         <Badge className="border-transparent bg-indigo-600 text-white">{m.our_label}</Badge>
+                                        {fullPhase ? (
+                                            <FullEntry m={m} rank={fullRank.get(m.hotkey) ?? null} of={fullDone.length} />
+                                        ) : (
+                                        <>
                                         {/* a running or still-scoring entry's stage-2 value is partial (unscored tasks count as -1): show its state, not the number */}
                                         {evalPhase && (entryState(m) === 'running' || entryState(m) === 'scoring') ? (
                                             <span className="flex items-baseline gap-1 whitespace-nowrap" title={`${entryState(m)}: ${Math.round(100 * stage2Progress(m))}% of the runs scored - ${PARTIAL_TIP}`}>
@@ -350,16 +359,15 @@ export default function Overview(props: Props) {
                                             <span className="font-mono text-sm tabular-nums">{num(scoreOf(m))}</span>
                                         )}
                                         {evalPhase && m.advanced && <Flag className="size-3 text-emerald-600 dark:text-emerald-400" aria-label="advanced to the full evaluation" />}
-                                        <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                                            {rankOf(m) ? `#${rankOf(m)}/${scored ? miners.length : ranked}` : ''}
-                                            {props.phase === 'full' && m.full_progress && <> · {pct(m.full_progress)}</>}
-                                        </span>
+                                        <span className="ml-auto text-xs whitespace-nowrap text-muted-foreground tabular-nums">{rankOf(m) ? `#${rankOf(m)}/${scored ? miners.length : ranked}` : ''}</span>
+                                        </>
+                                        )}
                                     </a>
                                 ))}
                             </div>
                         )}
                     </StatCard>
-                    <StatCard title={scored ? 'Top overall' : evalPhase ? 'Top of stage 2' : 'Top of stage 1'} icon={Trophy}>
+                    <StatCard title={scored ? 'Top overall' : fullPhase ? `Top overall · ${fullDone.length} scored so far` : evalPhase ? 'Top of stage 2' : 'Top of stage 1'} icon={Trophy}>
                         <ol className="space-y-0.5">
                             {leaders.map((m, i) => (
                                 <li key={m.id}>
@@ -393,7 +401,7 @@ export default function Overview(props: Props) {
                         {evalPhase && (
                             <div className="mt-1 text-xs text-muted-foreground">
                                 {props.phase === 'full'
-                                    ? `${cut.advanced} of ${cut.cohort} advanced · full-eval runs ${runTotals.run}/${runTotals.planned}`
+                                    ? `full evaluation: ${fullDone.length} of ${fullRows.length} entries scored · runs scored ${runTotals.graded}/${runTotals.planned}`
                                     : noCut
                                       ? 'stage 2 running · every stage-1 passer gets the full evaluation'
                                       : `stage 2 running · top ${cut.size} of ${cut.cohort} advance`}
@@ -451,7 +459,7 @@ export default function Overview(props: Props) {
                                         <Fragment key={m.id}>
                                         {lb.sort === null && cutBefore(lb.sorted, i, props.phase, cut) && <CutRow span={props.phase === 'full' ? 15 : 14} cut={cut} phase={props.phase} />}
                                         <TableRow className={cn('h-14', m.is_ours && 'bg-indigo-500/10 hover:bg-indigo-500/15', m.family && 'cursor-pointer')} onClick={rowClick(m.family)} title={FAMILY_HINT}>
-                                            <TableCell className="text-muted-foreground">{evalPhase ? (m.stage2_rank ?? '—') : (m.place ?? m.rank)}</TableCell>
+                                            <TableCell className="text-muted-foreground">{fullPhase ? (fullRank.get(m.hotkey) ?? '—') : evalPhase ? (m.stage2_rank ?? '—') : (m.place ?? m.rank)}</TableCell>
                                             <TableCell>
                                                 <HotkeyCell m={m} href={href(m.hotkey)} />
                                             </TableCell>
@@ -553,7 +561,7 @@ export default function Overview(props: Props) {
                     <TabsContent value="full" className="flex min-h-0 flex-col gap-2">
                         {filterBar}
                         <p className="text-sm text-muted-foreground">
-                            The {fullRows.length} entries in the full evaluation, {fullTasks.length} tasks ({bandCounts(fullTasks)}). Runs recorded {runTotals.run} of {runTotals.planned}; a cell
+                            The {fullRows.length} entries in the full evaluation, {fullTasks.length} tasks ({bandCounts(fullTasks)}). Runs scored {runTotals.graded} of {runTotals.planned}; {fullDone.length} entries scored so far; a cell
                             reads passes / finished runs while the task runs. Overall · short · medium · long are where each entry stands now: the platform formula over the
                             30 SOMA tasks (stage 2 + these) that have at least 3 graded runs — a running estimate, marked live, until the platform scores the entry.
                         </p>
@@ -1342,12 +1350,42 @@ function Stage2Score({ m }: { m: MinerRow }) {
     );
 }
 
+/** Share of the planned full-evaluation runs that have a result (graded) - what the score waits for. */
 function progressShare(p: FullProgress | null | undefined): number | null {
-    return p && p.planned > 0 ? p.run / p.planned : null;
+    return p && p.planned > 0 ? p.graded / p.planned : null;
 }
 
-function pct(p: FullProgress): string {
-    return `${Math.round((progressShare(p) ?? 0) * 100)}%`;
+/**
+ * One of our entries in the top card while the full evaluation runs: the platform's overall and its place among the scored
+ * entries once scored; else how much of it is scored and our running estimate of the overall (amber, partial).
+ */
+function FullEntry({ m, rank, of }: { m: MinerRow; rank: number | null; of: number }) {
+    const st = fullState(m);
+    if (st === 'done') {
+        return (
+            <>
+                <span className="font-mono text-sm tabular-nums">{num(m.overall)}</span>
+                <span className="ml-auto text-xs whitespace-nowrap text-emerald-700 tabular-nums dark:text-emerald-300" title={`place among the ${of} entries the full evaluation has scored`}>
+                    #{rank}/{of}
+                </span>
+            </>
+        );
+    }
+    if (st === 'out' || st === 'waiting') {
+        return <span className="text-xs text-muted-foreground">{st === 'out' ? m.status : 'waiting'}</span>;
+    }
+    const share = fullProgressShare(m);
+
+    return (
+        <>
+            <span className="font-mono text-sm text-amber-700 tabular-nums dark:text-amber-300" title={`running estimate over ${m.live?.tasks ?? 0} of 30 tasks - partial until every run is scored`}>
+                {num(m.live?.overall ?? null)}
+            </span>
+            <span className={cn('ml-auto text-xs whitespace-nowrap tabular-nums', st === 'running' ? 'text-sky-600 dark:text-sky-400' : 'text-amber-600 dark:text-amber-400')} title={`${m.full_progress?.graded ?? 0} of ${m.full_progress?.planned ?? 0} runs scored`}>
+                {st === 'scoring' ? 'scoring' : `${Math.round(100 * share)}% scored`}
+            </span>
+        </>
+    );
 }
 
 function bandCounts(tasks: TaskRef[]): string {
@@ -1403,10 +1441,10 @@ function ProgressCell({ p }: { p: FullProgress | null | undefined }) {
     return (
         <div className="w-28">
             <div className="flex justify-between gap-2 font-mono text-xs">
-                <span>
-                    {p.run}/{p.planned}
+                <span title="runs with a result / planned runs">
+                    {p.graded}/{p.planned}
                 </span>
-                <span className="text-muted-foreground">{p.graded > 0 ? `${p.passed}/${p.graded} ✓` : ''}</span>
+                <span className="text-muted-foreground">{p.graded > 0 ? `${p.passed} ✓` : ''}</span>
             </div>
             <div className="mt-0.5 h-1.5 rounded bg-muted">
                 <div className="h-1.5 rounded bg-emerald-500" style={{ width: `${Math.max(2, Math.round(share * 100))}%` }} />

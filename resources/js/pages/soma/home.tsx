@@ -4,8 +4,8 @@ import { Activity, ChartColumn, CircleCheck, Crown, ExternalLink, Flag, Gauge, H
 import { useMemo } from 'react';
 import { HeroChip, Kpi, MoreLink, Pill, Section, StackBar, scoreTone, signed } from '@/components/soma/kit';
 import { ago, shortKey, shortTask, utc } from '@/lib/soma';
-import type { EntryState } from '@/lib/soma-state';
-import { entryState, somaUrl, stage2Progress } from '@/lib/soma-state';
+import type { EntryState, EvalStage } from '@/lib/soma-state';
+import { entryState, evalStageOf, progressIn, somaUrl, stateIn } from '@/lib/soma-state';
 import { cn } from '@/lib/utils';
 import { home as homeRoute, hotkeys as hotkeysRoute, miner as minerRoute, overview as boardRoute } from '@/routes/soma';
 import type { CompetitionInfo, CutInfo, FamilySummary, MinerRow, Phase, TaskCell, TaskRef, WatcherInfo, WatchEvent } from '@/types';
@@ -21,6 +21,7 @@ import type { CompetitionInfo, CutInfo, FamilySummary, MinerRow, Phase, TaskCell
 type Props = {
     competition: CompetitionInfo;
     stage2_problems: TaskRef[];
+    full_problems?: TaskRef[];
     phase: Phase;
     cut: CutInfo;
     miners: MinerRow[];
@@ -50,9 +51,14 @@ type Props = {
 
 type State = EntryState;
 
-// the shared stage-2 state (lib/soma-state.ts): done = every run scored; scoring = ran, results still coming in
-const stateOf = (m: MinerRow): State => entryState(m);
-const progressOf = (m: MinerRow): number => stage2Progress(m);
+// the shared states (lib/soma-state.ts) of the round's current evaluation - stage 2 until the full evaluation starts,
+// then the full evaluation: done = scored; scoring = ran, results still coming in
+const stateOf = (m: MinerRow, stage: EvalStage): State => stateIn(m, stage);
+const progressOf = (m: MinerRow, stage: EvalStage): number => progressIn(m, stage);
+
+/** The score that orders entries in the current evaluation: stage 2 while it runs, then the platform's overall. */
+const headline = (m: MinerRow, stage: EvalStage): number | null => (stage === 'full' ? (m.overall ?? null) : (m.stage2_score ?? null));
+const HEADLINE: Record<EvalStage, string> = { stage2: 'stage 2', full: 'overall' };
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
@@ -83,17 +89,33 @@ function scoresOf(m: MinerRow): Record<ScoreKey, number | null> {
     };
 }
 
-/** A partial value (the entry still runs or is being scored): every score but stage 1. */
-const isPartial = (m: MinerRow, key: ScoreKey) => key !== 'stage1' && (entryState(m) === 'running' || entryState(m) === 'scoring');
+/**
+ * Whether one score of an entry is final: stage 1 for every passer; stage 2 once its stage-2 runs are all scored; overall,
+ * the bands and the two-band elements once the current evaluation scored the entry (during stage 2 they are the running
+ * values over its six tasks, in the full evaluation the platform's values over all 30 tasks).
+ */
+function scoreState(m: MinerRow, k: ScoreKey, stage: EvalStage): State {
+    const st = entryState(m);
+    if (st === 'out') {
+        return 'out';
+    }
+    if (k === 'stage1') {
+        return 'done';
+    }
 
-/** The best entry for each score: stage 1 among the stage-1 passers, the rest among the fully scored entries. */
-function bestBy(rows: MinerRow[]): Record<ScoreKey, { m: MinerRow; value: number } | null> {
+    return k === 'stage2' ? st : stateOf(m, stage);
+}
+
+/** A partial value: the entry still runs, is being scored or (full evaluation) has not started - every score but stage 1. */
+const isPartial = (m: MinerRow, key: ScoreKey, stage: EvalStage) => !['done', 'out'].includes(scoreState(m, key, stage));
+
+/** The best entry for each score: stage 1 among the stage-1 passers, the rest among the entries scored for that score. */
+function bestBy(rows: MinerRow[], stage: EvalStage): Record<ScoreKey, { m: MinerRow; value: number } | null> {
     const out = {} as Record<ScoreKey, { m: MinerRow; value: number } | null>;
     SCORE_KEYS.forEach((k) => {
         let best: { m: MinerRow; value: number } | null = null;
         rows.forEach((m) => {
-            const st = entryState(m);
-            if (st === 'out' || (k !== 'stage1' && st !== 'done')) {
+            if (scoreState(m, k, stage) !== 'done') {
                 return;
             }
             const v = scoresOf(m)[k];
@@ -110,15 +132,11 @@ function bestBy(rows: MinerRow[]): Record<ScoreKey, { m: MinerRow; value: number
 /** Per score: each counted entry's place (1 = best) and the best value - the same entries bestBy() counts. */
 type RankTable = Record<ScoreKey, { place: Map<string, number>; n: number; best: number | null }>;
 
-function rankTables(rows: MinerRow[]): RankTable {
+function rankTables(rows: MinerRow[], stage: EvalStage): RankTable {
     const out = {} as RankTable;
     SCORE_KEYS.forEach((k) => {
         const counted = rows
-            .filter((m) => {
-                const st = entryState(m);
-
-                return st !== 'out' && (k === 'stage1' || st === 'done') && scoresOf(m)[k] !== null;
-            })
+            .filter((m) => scoreState(m, k, stage) === 'done' && scoresOf(m)[k] !== null)
             .sort((a, b) => (scoresOf(b)[k] ?? 0) - (scoresOf(a)[k] ?? 0));
         // tied scores share a place (1 + the entries strictly above)
         const vals = counted.map((m) => scoresOf(m)[k] ?? 0);
@@ -153,11 +171,11 @@ const placeShare = (p: Place) => p.place / p.n;
 const placeTone = (p: Place) => (placeShare(p) <= 0.1 ? 'text-emerald-600 dark:text-emerald-400' : placeShare(p) <= 0.25 ? 'text-sky-600 dark:text-sky-400' : 'text-foreground/80');
 const placeFill = (p: Place) => (placeShare(p) <= 0.1 ? 'bg-emerald-500' : placeShare(p) <= 0.25 ? 'bg-sky-500' : 'bg-zinc-400 dark:bg-zinc-500');
 
-/** Passes against the baseline's passes on the finished runs of an entry (1 = same quality). */
-function qualityOf(m: MinerRow): { passed: number; base: number } {
+/** Passes against the baseline's passes on the finished runs of an entry (1 = same quality): stage 2, plus the full evaluation once it runs. */
+function qualityOf(m: MinerRow, stage: EvalStage): { passed: number; base: number } {
     let passed = 0;
     let base = 0;
-    Object.values(m.stage2 ?? {}).forEach((c) => {
+    [...Object.values(m.stage2 ?? {}), ...(stage === 'full' ? Object.values(m.full ?? {}) : [])].forEach((c) => {
         if (c.finished > 0 && c.passed !== null && c.baseline_passed !== null && c.baseline_total) {
             passed += c.passed;
             base += (c.baseline_passed / c.baseline_total) * c.finished;
@@ -197,51 +215,66 @@ function countdown(ms: number): string {
 }
 
 export default function Home(props: Props) {
-    const { competition, stage2_problems: tasks, phase, miners, events, watcher, hotkeys } = props;
-    usePoll(60_000, { only: ['miners', 'families', 'events', 'watcher', 'competition', 'stage2_problems', 'phase', 'cut', 'hotkeys'] });
+    const { competition, stage2_problems: tasks, full_problems: fullTasks, phase, miners, events, watcher, hotkeys } = props;
+    usePoll(60_000, { only: ['miners', 'families', 'events', 'watcher', 'competition', 'stage2_problems', 'full_problems', 'phase', 'cut', 'hotkeys'] });
     const now = Date.now();
 
+    // stage 2 until the full evaluation starts, then the full evaluation: states, ranks, standings and families follow it
+    const stage = evalStageOf(phase);
+    // the tasks an entry card and the standings draw: the six stage-2 tasks, then (full evaluation) every scored task
+    const shownTasks = useMemo(() => {
+        if (stage !== 'full') {
+            return tasks.map((t) => ({ ...t, part: 'stage2' as const }));
+        }
+        const bands = ['short', 'medium', 'long'];
+        const all = [...tasks.map((t) => ({ ...t, part: 'stage2' as const })), ...(fullTasks ?? []).map((t) => ({ ...t, part: 'full' as const }))];
+
+        return all.sort((a, b) => bands.indexOf(a.band ?? '') - bands.indexOf(b.band ?? '') || (a.part === b.part ? a.name.localeCompare(b.name) : a.part === 'stage2' ? -1 : 1));
+    }, [stage, tasks, fullTasks]);
+
     const v = useMemo(() => {
-        const passers = miners.filter((m) => stateOf(m) !== 'out');
-        const done = miners.filter((m) => stateOf(m) === 'done').sort((a, b) => (b.stage2_score ?? -9) - (a.stage2_score ?? -9));
+        const passers = miners.filter((m) => stateOf(m, stage) !== 'out');
+        const done2 = miners.filter((m) => entryState(m) === 'done').length;
+        const done = miners.filter((m) => stateOf(m, stage) === 'done').sort((a, b) => (headline(b, stage) ?? -9) - (headline(a, stage) ?? -9));
         const rank = new Map(done.map((m, i) => [m.hotkey, i + 1]));
-        const running = miners.filter((m) => stateOf(m) === 'running');
-        const scoring = miners.filter((m) => stateOf(m) === 'scoring');
+        const running = miners.filter((m) => stateOf(m, stage) === 'running');
+        const scoring = miners.filter((m) => stateOf(m, stage) === 'scoring');
         const label = (m: MinerRow) => Number((m.our_label ?? 'S999').replace(/\D/g, '')) || 999;
         const ours = miners.filter((m) => m.is_ours);
         const order: Record<State, number> = { done: 0, scoring: 1, running: 2, waiting: 3, out: 4 };
-        ours.sort((a, b) => order[stateOf(a)] - order[stateOf(b)] || (rank.get(a.hotkey) ?? 0) - (rank.get(b.hotkey) ?? 0) || label(a) - label(b));
-        const scores = done.map((m) => m.stage2_score ?? 0);
+        ours.sort((a, b) => order[stateOf(a, stage)] - order[stateOf(b, stage)] || (rank.get(a.hotkey) ?? 0) - (rank.get(b.hotkey) ?? 0) || label(a) - label(b));
+        const scores = done.map((m) => headline(m, stage) ?? 0);
         const median = scores.length ? [...scores].sort((a, b) => a - b)[Math.floor(scores.length / 2)] : null;
-        const q = ours.map(qualityOf);
+        const q = ours.map((m) => qualityOf(m, stage));
 
-        // families by their best finished stage-2 entry
+        // families by their best scored entry of the current evaluation
         const fam = new Map<string, { key: string; name: string; ours: boolean; best: MinerRow; entries: number; done: number }>();
         miners.forEach((m) => {
             const key = m.family ?? m.coldkey ?? m.hotkey;
             const f = fam.get(key) ?? { key, name: m.family_name ?? shortKey(m.coldkey ?? m.hotkey), ours: m.is_ours, best: m, entries: 0, done: 0 };
             f.entries += 1;
             f.ours ||= m.is_ours;
-            if (stateOf(m) === 'done') {
+            if (stateOf(m, stage) === 'done') {
                 f.done += 1;
-                if (stateOf(f.best) !== 'done' || (m.stage2_score ?? -9) > (f.best.stage2_score ?? -9)) {
+                if (stateOf(f.best, stage) !== 'done' || (headline(m, stage) ?? -9) > (headline(f.best, stage) ?? -9)) {
                     f.best = m;
                 }
             }
             fam.set(key, f);
         });
-        const famRows = [...fam.values()].filter((f) => f.done > 0).sort((a, b) => (b.best.stage2_score ?? -9) - (a.best.stage2_score ?? -9));
+        const famRows = [...fam.values()].filter((f) => f.done > 0).sort((a, b) => (headline(b.best, stage) ?? -9) - (headline(a.best, stage) ?? -9));
 
-        const leaders = bestBy(miners);
-        const ranks = rankTables(miners);
-        const oursBest = bestBy(ours);
+        const leaders = bestBy(miners, stage);
+        const ranks = rankTables(miners, stage);
+        const oursBest = bestBy(ours, stage);
 
-        return { leaders, oursBest, ranks, passers, done, rank, running, scoring, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
-    }, [miners]);
+        return { leaders, oursBest, ranks, passers, done2, done, rank, running, scoring, ours, median, scores, famRows, quality: { passed: sum(q.map((x) => x.passed)), base: sum(q.map((x) => x.base)) } };
+    }, [miners, stage]);
 
-    const best = v.ours.find((m) => stateOf(m) === 'done') ?? null;
     const counts = { done: 0, scoring: 0, running: 0, waiting: 0, out: 0 } as Record<State, number>;
-    v.ours.forEach((m) => (counts[stateOf(m)] += 1));
+    v.ours.forEach((m) => (counts[stateOf(m, stage)] += 1));
+    const full = stage === 'full';
+    const n = (k: ScoreKey) => v.ranks[k].n;
     const end = competition.evaluation_end_at ? new Date(competition.evaluation_end_at).getTime() : null;
     const uploadEnd = competition.upload_deadline_at ? new Date(competition.upload_deadline_at).getTime() : null;
     const pending = Object.values(watcher.pending ?? {}).reduce((a, b) => a + b, 0);
@@ -250,7 +283,7 @@ export default function Home(props: Props) {
         <>
             <Head title={`Round ${competition.round ?? competition.id}`} />
             <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 p-4 md:p-6">
-                <Hero leaders={v.leaders} competition={competition} phase={phase} now={now} end={end} uploadEnd={uploadEnd} done={v.done.length} running={v.running.length} scoring={v.scoring.length} passers={v.passers.length} entries={miners.length} watcher={watcher} pending={pending} />
+                <Hero leaders={v.leaders} competition={competition} phase={phase} now={now} end={end} uploadEnd={uploadEnd} done2={v.done2} done={v.done.length} running={v.running.length} scoring={v.scoring.length} passers={v.passers.length} entries={miners.length} watcher={watcher} pending={pending} />
 
                 <div className="grid gap-4 sm:grid-cols-3">
                     <Kpi icon={Sparkles} title="Our entries" tone="violet">
@@ -268,7 +301,7 @@ export default function Home(props: Props) {
                             ]}
                         />
                     </Kpi>
-                    <Kpi icon={Gauge} title="Stage 2 progress" tone="sky">
+                    <Kpi icon={Gauge} title={full ? 'Full evaluation progress' : 'Stage 2 progress'} tone="sky">
                         <div className="flex items-baseline gap-2">
                             <span className="text-3xl font-semibold tabular-nums">{v.done.length}</span>
                             <span className="text-sm text-muted-foreground">of {v.passers.length} fully scored</span>
@@ -282,7 +315,7 @@ export default function Home(props: Props) {
                             ]}
                         />
                     </Kpi>
-                    <Kpi icon={ShieldCheck} title="Our quality (stage 2)" tone="emerald">
+                    <Kpi icon={ShieldCheck} title={full ? 'Our quality (stage 2 + full evaluation)' : 'Our quality (stage 2)'} tone="emerald">
                         {v.quality.base > 0 ? (
                             <>
                                 <div className="flex items-baseline gap-2">
@@ -302,7 +335,11 @@ export default function Home(props: Props) {
                 <Section
                     icon={Trophy}
                     title="Our best per score"
-                    hint={`for each score: our best entry, its place, the gap to #1 and who is #1 · stage 1 ranked among the ${v.passers.length} stage-1 passers, the rest among the ${v.done.length} entries whose stage-2 runs are all scored${v.median !== null ? ` (stage-2 median ${signed(v.median)})` : ''}`}
+                    hint={
+                        full
+                            ? `for each score: our best scored entry, its place, the gap to #1 and who is #1 · stage 1 ranked among the ${n('stage1')} stage-1 passers, stage 2 among the ${n('stage2')} entries whose stage-2 runs are all scored, overall and the bands among the ${n('overall')} entries the full evaluation has scored${v.median !== null ? ` (overall median ${signed(v.median)})` : ''} · entries still in the full evaluation show partial values on their cards`
+                            : `for each score: our best entry, its place, the gap to #1 and who is #1 · stage 1 ranked among the ${n('stage1')} stage-1 passers, the rest among the ${v.done.length} entries whose stage-2 runs are all scored${v.median !== null ? ` (stage-2 median ${signed(v.median)})` : ''}`
+                    }
                 >
                     <BestTable best={v.oursBest} leaders={v.leaders} ranks={v.ranks} competition={competition.id} />
                 </Section>
@@ -310,12 +347,12 @@ export default function Home(props: Props) {
                 <Section
                     icon={Sparkles}
                     title="Our entries"
-                    hint="ranked among the entries whose stage-2 runs are all scored; others show their progress · click opens thesoma.ai"
+                    hint={`${full ? 'overall and the bands ranked among the entries the full evaluation has scored' : 'ranked among the entries whose stage-2 runs are all scored'}; others show their progress and partial values (amber) · click opens thesoma.ai`}
                     action={<MoreLink href={boardRoute.url({ query: { tab: 'ours' } })}>details</MoreLink>}
                 >
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                         {v.ours.map((m) => (
-                            <EntryCard key={m.hotkey} m={m} ranks={v.ranks} competition={competition.id} tasks={tasks} rank={v.rank.get(m.hotkey) ?? null} of={v.done.length} />
+                            <EntryCard key={m.hotkey} m={m} stage={stage} ranks={v.ranks} competition={competition.id} tasks={shownTasks} rank={v.rank.get(m.hotkey) ?? null} of={v.done.length} />
                         ))}
                     </div>
                 </Section>
@@ -329,28 +366,28 @@ export default function Home(props: Props) {
                     <HotkeyTable rows={hotkeys.ours} competition={competition.id} />
                 </Section>
 
-                <Section icon={Activity} title="Where we stand" hint="stage-2 scores of every fully scored entry; our entries marked">
-                    <Spread scores={v.scores} ours={v.ours.filter((m) => stateOf(m) === 'done')} median={v.median} />
+                <Section icon={Activity} title="Where we stand" hint={`${HEADLINE[stage]} scores of every ${full ? 'entry the full evaluation has scored' : 'fully scored entry'}; our entries marked`}>
+                    <Spread scores={v.scores} ours={v.ours.filter((m) => stateOf(m, stage) === 'done')} median={v.median} value={(m) => headline(m, stage)} empty={full ? 'the full evaluation has not scored any entry yet' : 'no entry has finished stage 2 yet'} />
                 </Section>
 
                 <div className="grid gap-5 xl:grid-cols-5">
                     <Section
                         className="xl:col-span-3"
                         icon={Trophy}
-                        title="Stage 2 standings"
-                        hint="top 10 of the fully scored entries and ours"
-                        action={<MoreLink href={boardRoute.url({ query: { tab: 'stage2' } })}>full table</MoreLink>}
+                        title={full ? 'Full evaluation standings' : 'Stage 2 standings'}
+                        hint={full ? `top 10 of the ${v.done.length} entries the full evaluation has scored, and ours` : 'top 10 of the fully scored entries and ours'}
+                        action={<MoreLink href={boardRoute.url({ query: { tab: full ? 'full' : 'stage2' } })}>full table</MoreLink>}
                     >
-                        <Standings done={v.done} tasks={tasks} competition={competition.id} />
+                        <Standings done={v.done} tasks={shownTasks} competition={competition.id} stage={stage} />
                     </Section>
                     <Section
                         className="xl:col-span-2"
                         icon={Users}
                         title="Families"
-                        hint="by their best fully scored stage-2 entry"
+                        hint={full ? 'by their best entry the full evaluation has scored (overall)' : 'by their best fully scored stage-2 entry'}
                         action={<MoreLink href={boardRoute.url({ query: { tab: 'families' } })}>all families</MoreLink>}
                     >
-                        <FamilyTable rows={v.famRows} />
+                        <FamilyTable rows={v.famRows} stage={stage} />
                     </Section>
                 </div>
 
@@ -378,6 +415,7 @@ function Hero(p: {
     now: number;
     end: number | null;
     uploadEnd: number | null;
+    done2: number;
     done: number;
     running: number;
     scoring: number;
@@ -389,11 +427,13 @@ function Hero(p: {
     const uploadsOpen = p.uploadEnd !== null && p.uploadEnd > p.now;
     const at = { stage1: 1, stage2: 2, full: 3, scored: 4 }[p.phase] ?? 0;
     const current = uploadsOpen ? 0 : at;
+    // p.done / scoring / running count the current evaluation: stage 2 until the full evaluation starts, then the full evaluation
+    const live = (done: number) => `${done} / ${p.passers} scored${p.scoring ? ` · ${p.scoring} scoring` : ''}${p.running ? ` · ${p.running} running` : ''}`;
     const steps: { label: string; icon: LucideIcon; note: string }[] = [
         { label: 'Uploads', icon: Upload, note: p.uploadEnd ? `${uploadsOpen ? 'close' : 'closed'} ${utc(p.competition.upload_deadline_at)}` : '' },
         { label: 'Stage 1', icon: Flag, note: `${p.passers} passed` },
-        { label: 'Stage 2', icon: Gauge, note: `${p.done} / ${p.passers} scored${p.scoring ? ` · ${p.scoring} scoring` : ''}${p.running ? ` · ${p.running} running` : ''}` },
-        { label: 'Full evaluation', icon: Users, note: 'every stage-1 passer' },
+        { label: 'Stage 2', icon: Gauge, note: at >= 3 ? `${p.done2} / ${p.passers} scored` : live(p.done) },
+        { label: 'Full evaluation', icon: Users, note: at >= 3 ? live(p.done) : 'every stage-1 passer' },
         { label: 'Final', icon: Crown, note: p.end ? `ends ${utc(p.competition.evaluation_end_at)}` : '' },
     ];
 
@@ -453,7 +493,7 @@ function Hero(p: {
                     return (
                         <li key={s.label} className="flex flex-col gap-2">
                             <div className={cn('h-1.5 rounded-full', state === 'done' ? 'bg-white' : state === 'now' ? 'bg-white/60' : 'bg-white/20')}>
-                                {state === 'now' && i === 2 && p.passers > 0 && <div className="h-full rounded-full bg-white" style={{ width: `${(100 * p.done) / p.passers}%` }} />}
+                                {state === 'now' && (i === 2 || i === 3) && p.passers > 0 && <div className="h-full rounded-full bg-white" style={{ width: `${(100 * p.done) / p.passers}%` }} />}
                             </div>
                             <div className="flex items-center gap-1.5 text-sm font-medium">
                                 {state === 'done' ? <CircleCheck className="size-4" /> : state === 'now' ? <LoaderCircle className="size-4 animate-spin" /> : <s.icon className="size-4 opacity-60" />}
@@ -482,12 +522,23 @@ function Hero(p: {
 
 // ------------------------------------------------------------------------------------------------ our entries
 
-function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ranks: RankTable; competition: number; tasks: TaskRef[]; rank: number | null; of: number }) {
-    const state = stateOf(m);
-    const pct = progressOf(m);
-    const q = qualityOf(m);
+type ShownTask = TaskRef & { part: 'stage2' | 'full' };
+
+function EntryCard({ m, stage, ranks, competition, tasks, rank, of }: { m: MinerRow; stage: EvalStage; ranks: RankTable; competition: number; tasks: ShownTask[]; rank: number | null; of: number }) {
+    const state = stateOf(m, stage);
+    const pct = progressOf(m, stage);
+    const q = qualityOf(m, stage);
     const qShare = q.base > 0 ? q.passed / q.base : null;
     const top = state === 'done' && rank !== null && of > 0 ? rank / of : null;
+    const full = stage === 'full';
+    const value = headline(m, stage);
+    // the partial value shown while an entry runs: the platform's partial stage-2 score, or (full evaluation) our running
+    // estimate of the overall over the tasks with at least three graded runs
+    const now = full ? (m.live?.overall ?? null) : (m.stage2_score ?? null);
+    const nowTitle = full
+        ? `running estimate over the ${m.live?.tasks ?? 0} tasks with at least three graded runs (stage 2 + full evaluation) - the platform publishes the overall only once every run is scored`
+        : 'current platform score - partial: runs without a result still count against it, so it moves until every run is scored';
+    const p = m.full_progress;
 
     return (
         <div
@@ -531,17 +582,20 @@ function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ra
             <div className="flex items-end justify-between gap-2">
                 {state === 'done' ? (
                     <div>
-                        <div className="text-xs text-muted-foreground">stage 2</div>
-                        <div className={cn('text-2xl font-semibold tabular-nums', scoreTone(m.stage2_score))}>{signed(m.stage2_score)}</div>
+                        <div className="text-xs text-muted-foreground">{full ? 'overall · full evaluation scored' : 'stage 2'}</div>
+                        <div className={cn('text-2xl font-semibold tabular-nums', scoreTone(value))}>{signed(value)}</div>
                     </div>
                 ) : state === 'running' || state === 'scoring' ? (
                     <div className="w-full">
-                        <div className="text-xs text-muted-foreground">{state === 'running' ? 'stage 2 running · runs scored' : 'runs done · results coming in'}</div>
+                        <div className="text-xs text-muted-foreground">
+                            {state === 'running' ? `${full ? 'full evaluation' : 'stage 2'} running · runs scored` : 'runs done · results coming in'}
+                            {full && p ? ` · ${p.graded} of ${p.planned}` : ''}
+                        </div>
                         <div className="flex items-baseline gap-3">
                             <span className="text-2xl font-semibold tabular-nums">{Math.round(100 * pct)}%</span>
-                            {m.stage2_score !== null && m.stage2_score !== undefined && (
-                                <span className="text-sm text-muted-foreground" title="current platform score - partial: runs without a result still count against it, so it moves until every run is scored">
-                                    now <span className={cn('text-lg font-semibold tabular-nums', scoreTone(m.stage2_score))}>{signed(m.stage2_score)}</span>
+                            {now !== null && (
+                                <span className="text-sm text-muted-foreground" title={nowTitle}>
+                                    {full ? 'estimate' : 'now'} <span className="text-lg font-semibold text-amber-600 tabular-nums dark:text-amber-400">{signed(now)}</span>
                                 </span>
                             )}
                         </div>
@@ -551,7 +605,7 @@ function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ra
                     </div>
                 ) : (
                     <div>
-                        <div className="text-xs text-muted-foreground">stage 2</div>
+                        <div className="text-xs text-muted-foreground">{full ? 'full evaluation' : 'stage 2'}</div>
                         <div className="text-2xl font-semibold text-muted-foreground">not started</div>
                     </div>
                 )}
@@ -559,17 +613,17 @@ function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ra
 
             {/* the nine scores with their place and the gap to #1; a partial value (still running or being scored) is amber */}
             <div className="relative z-10 rounded-lg bg-muted/40 px-3 py-2">
-                <ScoreTable m={m} ranks={ranks} />
+                <ScoreTable m={m} ranks={ranks} stage={stage} />
             </div>
 
-            <div className="relative z-10 grid grid-cols-6 gap-1">
+            <div className={cn('relative z-10 grid gap-1', full ? 'grid-cols-10' : 'grid-cols-6')}>
                 {tasks.map((t) => {
-                    const c = m.stage2?.[t.name];
+                    const c = t.part === 'stage2' ? m.stage2?.[t.name] : m.full?.[t.name];
 
                     return (
                         <div
-                            key={t.name}
-                            title={`${shortTask(t.name)} · ${t.band ?? ''} · ${
+                            key={`${t.part}-${t.name}`}
+                            title={`${shortTask(t.name)} · ${t.band ?? ''}${full ? ` · ${t.part === 'stage2' ? 'stage 2' : 'full evaluation'}` : ''} · ${
                                 !c?.finished
                                     ? 'not run yet'
                                     : c.total && c.finished < c.total
@@ -577,14 +631,14 @@ function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ra
                                       : `${c.passed}/${c.finished} passed (baseline ${c.baseline_passed}/${c.baseline_total}) · ${signed(c.score)}`
                             }`}
                         >
-                            <div className={cn('h-2 rounded-sm', cellTone(c))} />
+                            <div className={cn('h-2 rounded-sm', cellTone(c), full && t.part === 'stage2' && 'ring-1 ring-indigo-500/60')} />
                         </div>
                     );
                 })}
             </div>
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
-                    six stage-2 tasks <ExternalLink className="size-3 opacity-0 transition group-hover:opacity-100" />
+                    {full ? `${tasks.length} tasks by band · ringed = stage 2` : 'six stage-2 tasks'} <ExternalLink className="size-3 opacity-0 transition group-hover:opacity-100" />
                 </span>
                 {qShare !== null && <span className={cn(qShare < 0.95 && 'text-amber-600', qShare < 0.8 && 'text-rose-600')}>quality {(100 * qShare).toFixed(0)}% of baseline</span>}
             </div>
@@ -594,15 +648,15 @@ function EntryCard({ m, ranks, competition, tasks, rank, of }: { m: MinerRow; ra
 
 // ------------------------------------------------------------------------------------------------ spread
 
-function Spread({ scores, ours, median }: { scores: number[]; ours: MinerRow[]; median: number | null }) {
+function Spread({ scores, ours, median, value, empty }: { scores: number[]; ours: MinerRow[]; median: number | null; value: (m: MinerRow) => number | null; empty: string }) {
     if (scores.length === 0) {
-        return <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">no entry has finished stage 2 yet</div>;
+        return <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">{empty}</div>;
     }
     // the window: 0.2 below the median to the top (and every entry of ours); entries far below - tasks that failed or did
     // not run count as -1 - are counted, not drawn, so the field's crowd stays readable
     const sorted = [...scores].sort((a, b) => a - b);
     const mid = median ?? sorted[Math.floor(sorted.length / 2)];
-    const lo = Math.min(Math.floor((mid - 0.2) * 20) / 20, ...ours.map((m) => Math.floor(((m.stage2_score ?? 0) - 0.02) * 20) / 20));
+    const lo = Math.min(Math.floor((mid - 0.2) * 20) / 20, ...ours.map((m) => Math.floor(((value(m) ?? 0) - 0.02) * 20) / 20));
     const hi = Math.max(0.3, Math.ceil((sorted[sorted.length - 1] + 0.01) * 20) / 20);
     const below = scores.filter((s) => s < lo).length;
     const step = 0.005;
@@ -616,7 +670,7 @@ function Spread({ scores, ours, median }: { scores: number[]; ours: MinerRow[]; 
         ticks.push(Math.round(t * 20) / 20);
     }
     // our markers, sorted by score, stacked in rows so close labels never overlap
-    const marks = [...ours].sort((a, b) => (a.stage2_score ?? 0) - (b.stage2_score ?? 0)).map((m, i) => ({ m, row: i % 3 }));
+    const marks = [...ours].sort((a, b) => (value(a) ?? 0) - (value(b) ?? 0)).map((m, i) => ({ m, row: i % 3 }));
 
     return (
         <div className="rounded-xl border bg-card p-5 shadow-sm">
@@ -632,8 +686,8 @@ function Spread({ scores, ours, median }: { scores: number[]; ours: MinerRow[]; 
                     </div>
                 )}
                 {marks.map(({ m, row }) => (
-                    <div key={m.hotkey} className="absolute bottom-0 flex flex-col items-center" style={{ left: `${x(m.stage2_score ?? 0)}%`, top: `${row * 17}px`, transform: 'translateX(-50%)' }}>
-                        <span className="rounded bg-indigo-600 px-1.5 text-[10px] leading-4 font-semibold text-white shadow" title={signed(m.stage2_score)}>
+                    <div key={m.hotkey} className="absolute bottom-0 flex flex-col items-center" style={{ left: `${x(value(m) ?? 0)}%`, top: `${row * 17}px`, transform: 'translateX(-50%)' }}>
+                        <span className="rounded bg-indigo-600 px-1.5 text-[10px] leading-4 font-semibold text-white shadow" title={signed(value(m))}>
                             {m.our_label}
                         </span>
                         <span className="w-px flex-1 bg-indigo-600/80" />
@@ -658,7 +712,7 @@ function Spread({ scores, ours, median }: { scores: number[]; ours: MinerRow[]; 
 
 // ------------------------------------------------------------------------------------------------ standings, families, feed
 
-function Standings({ done, tasks, competition }: { done: MinerRow[]; tasks: TaskRef[]; competition: number }) {
+function Standings({ done, tasks, competition, stage }: { done: MinerRow[]; tasks: ShownTask[]; competition: number; stage: EvalStage }) {
     const shown = done.map((m, i) => ({ m, rank: i + 1 })).filter((r) => r.rank <= 10 || r.m.is_ours);
     const rows: ({ gap: true; key: string } | { gap: false; m: MinerRow; rank: number })[] = [];
     shown.forEach((r, i) => {
@@ -676,7 +730,7 @@ function Standings({ done, tasks, competition }: { done: MinerRow[]; tasks: Task
                         <th className="w-12 px-3 py-2 text-left font-medium">#</th>
                         <th className="px-3 py-2 text-left font-medium">entry</th>
                         <th className="hidden px-3 py-2 text-left font-medium md:table-cell">tasks</th>
-                        <th className="px-3 py-2 text-right font-medium">stage 2</th>
+                        <th className="px-3 py-2 text-right font-medium">{HEADLINE[stage]}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -698,12 +752,14 @@ function Standings({ done, tasks, competition }: { done: MinerRow[]; tasks: Task
                                 </td>
                                 <td className="hidden px-3 py-2 md:table-cell">
                                     <div className="flex gap-0.5">
-                                        {tasks.map((t) => (
-                                            <div key={t.name} className={cn('h-3 w-5 rounded-sm', cellTone(r.m.stage2?.[t.name]))} title={`${shortTask(t.name)} ${signed(r.m.stage2?.[t.name]?.score)}`} />
-                                        ))}
+                                        {tasks.map((t) => {
+                                            const c = t.part === 'stage2' ? r.m.stage2?.[t.name] : r.m.full?.[t.name];
+
+                                            return <div key={`${t.part}-${t.name}`} className={cn('h-3 rounded-sm', stage === 'full' ? 'w-2' : 'w-5', cellTone(c))} title={`${shortTask(t.name)} · ${t.band ?? ''} ${signed(c?.score)}`} />;
+                                        })}
                                     </div>
                                 </td>
-                                <td className={cn('px-3 py-2 text-right font-mono tabular-nums', scoreTone(r.m.stage2_score))}>{signed(r.m.stage2_score)}</td>
+                                <td className={cn('px-3 py-2 text-right font-mono tabular-nums', scoreTone(headline(r.m, stage)))}>{signed(headline(r.m, stage))}</td>
                             </tr>
                         ),
                     )}
@@ -713,11 +769,15 @@ function Standings({ done, tasks, competition }: { done: MinerRow[]; tasks: Task
     );
 }
 
-function FamilyTable({ rows }: { rows: { key: string; name: string; ours: boolean; best: MinerRow; entries: number; done: number }[] }) {
+function FamilyTable({ rows, stage }: { rows: { key: string; name: string; ours: boolean; best: MinerRow; entries: number; done: number }[]; stage: EvalStage }) {
     const top = rows.slice(0, 10);
     const ourIndex = rows.findIndex((f) => f.ours);
     const shown = ourIndex >= 10 ? [...top, rows[ourIndex]] : top;
-    const max = Math.max(...rows.map((f) => f.best.stage2_score ?? 0), 0.01);
+    const val = (m: MinerRow) => headline(m, stage);
+    const max = Math.max(...rows.map((f) => val(f.best) ?? 0), 0.01);
+    if (rows.length === 0) {
+        return <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">no family has a scored entry yet</div>;
+    }
 
     return (
         <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
@@ -727,7 +787,7 @@ function FamilyTable({ rows }: { rows: { key: string; name: string; ours: boolea
                         <th className="w-10 px-3 py-2 text-left font-medium">#</th>
                         <th className="px-3 py-2 text-left font-medium">family</th>
                         <th className="px-3 py-2 text-right font-medium">entries</th>
-                        <th className="w-40 px-3 py-2 text-right font-medium">best stage 2</th>
+                        <th className="w-40 px-3 py-2 text-right font-medium">best {HEADLINE[stage]}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -744,9 +804,9 @@ function FamilyTable({ rows }: { rows: { key: string; name: string; ours: boolea
                                 <td className="px-3 py-2">
                                     <div className="flex items-center justify-end gap-2">
                                         <div className="hidden h-1.5 w-16 overflow-hidden rounded-full bg-muted sm:block">
-                                            <div className={cn('h-full rounded-full', f.ours ? 'bg-indigo-500' : 'bg-emerald-500')} style={{ width: `${Math.max(0, (100 * (f.best.stage2_score ?? 0)) / max)}%` }} />
+                                            <div className={cn('h-full rounded-full', f.ours ? 'bg-indigo-500' : 'bg-emerald-500')} style={{ width: `${Math.max(0, (100 * (val(f.best) ?? 0)) / max)}%` }} />
                                         </div>
-                                        <span className={cn('font-mono tabular-nums', scoreTone(f.best.stage2_score))}>{signed(f.best.stage2_score)}</span>
+                                        <span className={cn('font-mono tabular-nums', scoreTone(val(f.best)))}>{signed(val(f.best))}</span>
                                     </div>
                                 </td>
                             </tr>
@@ -895,7 +955,7 @@ function Gap({ p }: { p: Place }) {
 }
 
 /** One entry's scores as rows: score, place of n, a bar, the gap to #1; a thin line between the groups. */
-function ScoreTable({ m, ranks }: { m: MinerRow; ranks: RankTable }) {
+function ScoreTable({ m, ranks, stage }: { m: MinerRow; ranks: RankTable; stage: EvalStage }) {
     const scores = scoresOf(m);
     // a score with no value yet (stage 2 not run) is left out, and so is a group left empty
     const groups = GROUPS.map((g) => ({ ...g, keys: g.keys.filter((k) => scores[k] !== null) })).filter((g) => g.keys.length > 0);
@@ -915,7 +975,7 @@ function ScoreTable({ m, ranks }: { m: MinerRow; ranks: RankTable }) {
                 <tbody key={g.title} className={cn(gi > 0 && 'border-t border-border/70', '[&>tr:first-child>td]:pt-1.5 [&>tr:last-child>td]:pb-1.5')}>
                     {g.keys.map((k) => {
                         const val = scores[k];
-                        const partial = val !== null && isPartial(m, k);
+                        const partial = val !== null && isPartial(m, k, stage);
                         const p = partial ? null : placeOf(ranks, k, m, val);
 
                         return (
@@ -937,7 +997,7 @@ function ScoreTable({ m, ranks }: { m: MinerRow; ranks: RankTable }) {
                                     </>
                                 ) : (
                                     <td colSpan={3} className="py-0.5 pl-3 text-right text-[11px] text-muted-foreground">
-                                        {partial ? 'partial · still scoring' : val === null ? '' : 'not ranked'}
+                                        {partial ? (scoreState(m, k, stage) === 'waiting' ? 'partial · stage-2 tasks only' : 'partial · still scoring') : val === null ? '' : 'not ranked'}
                                     </td>
                                 )}
                             </tr>

@@ -62,10 +62,12 @@ class Presenter
                 'history' => $history[$m->hotkey] ?? [],
             ];
         });
-        // The phase decides the order: the platform's place while uploads run and once scored; during the evaluation the
-        // place follows a partial overall, so the order is "advanced first, then the stage-2 score".
+        // The phase decides the order: the platform's place while uploads run and once scored; during stage 2 the place
+        // follows a partial overall, so the order is "advanced first, then the stage-2 score"; during the full evaluation
+        // the entries it has scored come first by their overall (2026-11-26: they were listed by stage 2), then the rest.
+        $fullDone = fn ($r) => $phase === 'full' && $r['status'] === 'scored' && $r['overall'] !== null;
         $rows = ($phase === 'stage2' || $phase === 'full'
-            ? $rows->sortBy(fn ($r) => [$r['advanced'] ? 0 : 1, $r['stage2_rank'] ?? 9999, $r['rank'] ?? 9999])
+            ? $rows->sortBy(fn ($r) => [$fullDone($r) ? 0 : 1, $fullDone($r) ? -$r['overall'] : 0, $r['advanced'] ? 0 : 1, $r['stage2_rank'] ?? 9999, $r['rank'] ?? 9999])
             : $rows->sortBy(fn ($r) => [$r['place'] === null ? 1 : 0, $r['place'] ?? 9999, $r['rank'] ?? 9999]))->values();
         $taskList = fn (Collection $ts) => $ts->unique('task_name')
             ->sortBy(fn (MinerTask $t) => [array_search($t->complexity, ['short', 'medium', 'long'], true), $t->task_name])

@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { HeroChip, HeroStat, PAGE, PageHero, Pill, scoreTone, signed, StackBar } from '@/components/soma/kit';
 import { ago, shortKey, utc } from '@/lib/soma';
 import type { EntryState } from '@/lib/soma-state';
-import { entryState, somaUrl, stage2Progress } from '@/lib/soma-state';
+import { entryState, evalStageOf, progressIn, somaUrl, stateIn } from '@/lib/soma-state';
 import { cn } from '@/lib/utils';
 import { home as hubRoute } from '@/routes';
 import { overview as sn34Route } from '@/routes/sn34';
@@ -22,7 +22,9 @@ import type { CompetitionInfo, MinerRow, Phase, TaskRef } from '@/types';
  * decision's NV is against the current king and promotion needs LB > 0.2; "failed" / "error" is a state now, not the end
  * (runs here have turned completed hours later); family labels are coldkey prefixes, not operator names.
  */
-type LightMiner = Pick<MinerRow, 'hotkey' | 'is_ours' | 'our_label' | 'status' | 'stage1_score' | 'stage2_score' | 'family' | 'family_name' | 'coldkey' | 'stage2'>;
+type LightMiner = Pick<MinerRow, 'hotkey' | 'is_ours' | 'our_label' | 'status' | 'stage1_score' | 'stage2_score' | 'family' | 'family_name' | 'coldkey' | 'stage2' | 'overall' | 'full_progress'> & {
+    live?: { overall: number | null; tasks: number } | null;
+};
 
 type Props = {
     soma: {
@@ -65,20 +67,28 @@ export default function Hub({ soma, sn34 }: Props) {
     usePoll(60_000);
     const now = Date.now();
 
+    // stage 2 until the full evaluation starts, then the full evaluation (2026-11-26: the page kept showing stage 2 while
+    // the full evaluation scored our first entries)
+    const stage = evalStageOf(soma.phase);
+    const full = stage === 'full';
+    const stateOf = (m: LightMiner) => stateIn(m, stage);
+    const headline = (m: LightMiner) => (full ? (m.overall ?? null) : (m.stage2_score ?? null));
     const s = useMemo(() => {
+        const st = (m: LightMiner) => stateIn(m, stage);
+        const value = (m: LightMiner) => (stage === 'full' ? (m.overall ?? null) : (m.stage2_score ?? null));
         const passers = soma.miners.filter((m) => entryState(m) !== 'out');
-        const done = soma.miners.filter((m) => entryState(m) === 'done').sort((a, b) => (b.stage2_score ?? -9) - (a.stage2_score ?? -9));
+        const done = soma.miners.filter((m) => st(m) === 'done').sort((a, b) => (value(b) ?? -9) - (value(a) ?? -9));
         const rank = new Map(done.map((m, i) => [m.hotkey, i + 1]));
-        const count = (st: EntryState) => soma.miners.filter((m) => entryState(m) === st).length;
+        const count = (x: EntryState) => soma.miners.filter((m) => st(m) === x).length;
         const order: Record<EntryState, number> = { done: 0, scoring: 1, running: 2, waiting: 3, out: 4 };
         const label = (m: LightMiner) => Number((m.our_label ?? 'S999').replace(/\D/g, '')) || 999;
-        const ours = soma.miners.filter((m) => m.is_ours).sort((a, b) => order[entryState(a)] - order[entryState(b)] || (rank.get(a.hotkey) ?? 0) - (rank.get(b.hotkey) ?? 0) || label(a) - label(b));
-        const oursBy = (st: EntryState) => ours.filter((m) => entryState(m) === st).length;
+        const ours = soma.miners.filter((m) => m.is_ours).sort((a, b) => order[st(a)] - order[st(b)] || (rank.get(a.hotkey) ?? 0) - (rank.get(b.hotkey) ?? 0) || label(a) - label(b));
+        const oursBy = (x: EntryState) => ours.filter((m) => st(m) === x).length;
 
         return { passers: passers.length, done, rank, scoring: count('scoring'), running: count('running'), ours, oursBy };
-    }, [soma.miners]);
+    }, [soma.miners, stage]);
 
-    const best = s.ours.find((m) => entryState(m) === 'done') ?? null;
+    const best = s.ours.find((m) => stateOf(m) === 'done') ?? null;
     const end = soma.competition.evaluation_end_at ? new Date(soma.competition.evaluation_end_at).getTime() : null;
     const king = sn34.kings.find((k) => k.seat === 'current') ?? sn34.kings[0] ?? null;
 
@@ -117,10 +127,10 @@ export default function Hub({ soma, sn34 }: Props) {
                         ]}
                     >
                         <div className="grid gap-3 sm:grid-cols-2">
-                            <Stat icon={Trophy} label="our best (fully scored)">
+                            <Stat icon={Trophy} label={full ? 'our best overall (full evaluation scored)' : 'our best (fully scored)'}>
                                 {best ? (
                                     <>
-                                        <span className={cn('text-2xl font-semibold tabular-nums', scoreTone(best.stage2_score))}>{signed(best.stage2_score)}</span>
+                                        <span className={cn('text-2xl font-semibold tabular-nums', scoreTone(headline(best)))}>{signed(headline(best))}</span>
                                         <span className="text-xs text-muted-foreground">
                                             {best.our_label} · #{s.rank.get(best.hotkey)} of {s.done.length}
                                         </span>
@@ -129,7 +139,7 @@ export default function Hub({ soma, sn34 }: Props) {
                                     <span className="text-sm text-muted-foreground">none fully scored yet</span>
                                 )}
                             </Stat>
-                            <Stat icon={Gauge} label="stage 2 fully scored">
+                            <Stat icon={Gauge} label={full ? 'full evaluation scored' : 'stage 2 fully scored'}>
                                 <span className="text-2xl font-semibold tabular-nums">{s.done.length}</span>
                                 <span className="text-xs text-muted-foreground">
                                     of {s.passers} · {s.scoring} scoring · {s.running} running
@@ -165,16 +175,19 @@ export default function Hub({ soma, sn34 }: Props) {
                                 <thead className="bg-muted/50 text-xs text-muted-foreground">
                                     <tr>
                                         <th className="px-3 py-2 text-left font-medium">entry</th>
-                                        <th className="px-3 py-2 text-left font-medium">stage 2</th>
+                                        <th className="px-3 py-2 text-left font-medium">{full ? 'overall · full evaluation' : 'stage 2'}</th>
                                         <th className="px-3 py-2 text-right font-medium">rank</th>
+                                        {full && <th className="px-3 py-2 text-right font-medium">stage 2</th>}
                                         <th className="px-3 py-2 text-right font-medium">stage 1</th>
                                         <th className="w-8" />
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {s.ours.map((m) => {
-                                        const st = entryState(m);
-                                        const pct = stage2Progress(m);
+                                        const st = stateOf(m);
+                                        const pct = progressIn(m, stage);
+                                        // partial value while it runs: the platform's partial stage-2 score, or (full evaluation) our running estimate
+                                        const now = full ? (m.live?.overall ?? null) : (m.stage2_score ?? null);
 
                                         return (
                                             <tr key={m.hotkey} className="border-t hover:bg-muted/40">
@@ -186,7 +199,7 @@ export default function Hub({ soma, sn34 }: Props) {
                                                 </td>
                                                 <td className="px-3 py-1.5">
                                                     {st === 'done' ? (
-                                                        <span className={cn('font-mono tabular-nums', scoreTone(m.stage2_score))}>{signed(m.stage2_score)}</span>
+                                                        <span className={cn('font-mono tabular-nums', scoreTone(headline(m)))}>{signed(headline(m))}</span>
                                                     ) : st === 'running' || st === 'scoring' ? (
                                                         <span className="flex items-center gap-2">
                                                             <Pill tone={st === 'running' ? 'sky' : 'amber'}>
@@ -196,9 +209,16 @@ export default function Hub({ soma, sn34 }: Props) {
                                                                 <span className={cn('block h-full rounded-full', st === 'running' ? 'bg-sky-500' : 'bg-amber-400')} style={{ width: `${100 * pct}%` }} />
                                                             </span>
                                                             <span className="text-xs text-muted-foreground tabular-nums">{Math.round(100 * pct)}%</span>
-                                                            {m.stage2_score !== null && m.stage2_score !== undefined && (
-                                                                <span className="text-xs text-muted-foreground" title="current platform score - partial: runs without a result still count against it, so it moves until every run is scored">
-                                                                    now <span className={cn('font-mono tabular-nums', scoreTone(m.stage2_score))}>{signed(m.stage2_score)}</span>
+                                                            {now !== null && (
+                                                                <span
+                                                                    className="text-xs text-muted-foreground"
+                                                                    title={
+                                                                        full
+                                                                            ? `running estimate over the ${m.live?.tasks ?? 0} tasks with at least three graded runs - the platform publishes the overall once every run is scored`
+                                                                            : 'current platform score - partial: runs without a result still count against it, so it moves until every run is scored'
+                                                                    }
+                                                                >
+                                                                    {full ? 'est.' : 'now'} <span className="font-mono text-amber-600 tabular-nums dark:text-amber-400">{signed(now)}</span>
                                                                 </span>
                                                             )}
                                                         </span>
@@ -209,6 +229,7 @@ export default function Hub({ soma, sn34 }: Props) {
                                                     )}
                                                 </td>
                                                 <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{st === 'done' ? `#${s.rank.get(m.hotkey)}` : '—'}</td>
+                                                {full && <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums">{signed(m.stage2_score)}</td>}
                                                 <td className="px-3 py-1.5 text-right font-mono text-xs tabular-nums">{signed(m.stage1_score)}</td>
                                                 <td className="px-2 py-1.5 text-right">
                                                     <Link href={minerRoute({ competition: soma.competition.id, hotkey: m.hotkey })} className="inline-flex rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="our analysis of this entry">
@@ -222,7 +243,9 @@ export default function Hub({ soma, sn34 }: Props) {
                             </table>
                         </div>
                         <p className="text-xs text-muted-foreground">
-                            Ranked among the {s.done.length} entries whose stage-2 runs are all scored. An entry still running or still being scored shows its progress; its partial score counts unscored tasks as −1.
+                            {full
+                                ? `Ranked by overall among the ${s.done.length} entries the full evaluation has scored. An entry still in the full evaluation shows the share of its runs scored and our running estimate (amber).`
+                                : `Ranked among the ${s.done.length} entries whose stage-2 runs are all scored. An entry still running or still being scored shows its progress; its partial score counts unscored tasks as −1.`}
                         </p>
                     </Panel>
 
